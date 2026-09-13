@@ -62,7 +62,7 @@ func (s *Server) Start(ctx context.Context) error {
 			return
 		}
 		for _, a := range store.Accounts {
-			_, _ = quota.FetchAccountQuota(a)
+			_, _ = quota.FetchAccountQuota(a, a.ID == store.ActiveAccountID)
 		}
 		_ = s.storage.Save(store)
 		w.Header().Set("Content-Type", "application/json")

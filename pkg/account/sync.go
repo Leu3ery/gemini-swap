@@ -184,13 +184,6 @@ func SyncToAntigravity(acc *Account) error {
 			_ = cmd.Run()
 			cancel()
 		}
-
-		// 3. Restart running Antigravity server if not disabled
-		if os.Getenv("GEMINI_SWAP_NO_RESTART") != "1" {
-			go func() {
-				_ = RestartAntigravityLanguageServer()
-			}()
-		}
 	}
 
 	return nil

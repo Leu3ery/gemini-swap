@@ -179,7 +179,7 @@ func buildDefaultAntigravityQuota() *account.QuotaInfo {
 	}
 }
 
-func FetchAccountQuota(acc *account.Account) (*account.QuotaInfo, error) {
+func FetchAccountQuota(acc *account.Account, isActive bool) (*account.QuotaInfo, error) {
 	if acc.Type == account.TypeAPIKey {
 		return FetchAPIKeyQuota(acc)
 	}
@@ -193,19 +193,20 @@ func FetchAccountQuota(acc *account.Account) (*account.QuotaInfo, error) {
 		_ = auth.RefreshToken(acc.OAuth)
 	}
 
-	// 1. Try fetching live Antigravity limits from local language server
-	if q, err := fetchAntigravityQuota(); err == nil && len(q.Groups) > 0 {
-		acc.LastQuota = q
-		return q, nil
+	// 1. If this is the active account in Antigravity, fetch live limits from local language server
+	if isActive {
+		if q, err := fetchAntigravityQuota(); err == nil && len(q.Groups) > 0 {
+			acc.LastQuota = q
+			return q, nil
+		}
 	}
 
-	// 2. If account already has last quota with groups, update timestamp and return
+	// 2. If account already has recorded quota from when it was active, keep its own quota
 	if acc.LastQuota != nil && len(acc.LastQuota.Groups) > 0 {
-		acc.LastQuota.UpdatedAt = time.Now()
 		return acc.LastQuota, nil
 	}
 
-	// 3. Fallback to default Antigravity quota
+	// 3. Fallback to default fresh Antigravity quota (100% available)
 	q := buildDefaultAntigravityQuota()
 	acc.LastQuota = q
 	return q, nil

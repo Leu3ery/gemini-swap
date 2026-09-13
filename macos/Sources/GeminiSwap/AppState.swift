@@ -92,27 +92,16 @@ class AppState: ObservableObject {
         // Update local state
         activeAccountID = id
         
-        // Run CLI switch command to update all stores, Antigravity, and ~/.gemini/
+        // Run CLI switch command to update all stores, Antigravity credentials, and ~/.gemini/
         runCLICommand(["switch", id])
 
-        // Save local accounts.json
-        do {
-            let store = StoreData(
-                version: 1,
-                activeAccountID: id,
-                accounts: accounts,
-                proxyPort: 8045,
-                autoRotate: true,
-                lastUpdated: ISO8601DateFormatter().string(from: Date())
-            )
-            let data = try JSONEncoder().encode(store)
-            try data.write(to: accountsFileURL, options: .atomic)
-            syncToGeminiCLI(account: target)
-            syncToAntigravity(account: target)
-            showToast("Switched to \(target.name) (Antigravity & CLI synced)")
-        } catch {
-            print("Error writing accounts file: \(error)")
-        }
+        // Ensure CLI and Antigravity tokens are synced
+        syncToGeminiCLI(account: target)
+        syncToAntigravity(account: target)
+
+        // Reload updated accounts data and distinct quotas
+        readAccountsFile()
+        showToast("Switched to \(target.name) (Antigravity & CLI synced)")
     }
 
     func refreshQuotas() {

@@ -193,6 +193,11 @@ func handleSwitch(storage *account.Storage, args []string) {
 	fmt.Println("  Synchronized ~/.gemini/oauth_creds.json and ~/.gemini/google_accounts.json")
 	if acc.Type == account.TypeOAuth {
 		fmt.Println("  Synchronized Google Antigravity session & credentials")
+		// Refresh quota for the newly active account
+		if q, qErr := quota.FetchAccountQuota(acc, true); qErr == nil && q != nil {
+			acc.LastQuota = q
+			_ = storage.AddAccount(acc)
+		}
 	}
 }
 
@@ -298,7 +303,7 @@ func handleQuota(storage *account.Storage, args []string) {
 	fmt.Println("\nFetching latest usage & quotas from Google...")
 	for _, acc := range targets {
 		fmt.Printf("\n=== %s (%s) ===\n", acc.Name, acc.Type)
-		qInfo, qErr := quota.FetchAccountQuota(acc)
+		qInfo, qErr := quota.FetchAccountQuota(acc, acc.ID == store.ActiveAccountID)
 		if qErr != nil {
 			fmt.Printf("  Failed to retrieve quota: %v\n", qErr)
 			continue
@@ -378,7 +383,7 @@ func handleLogin(storage *account.Storage, args []string) {
 	}
 
 	// Fetch initial quota
-	_, _ = quota.FetchAccountQuota(acc)
+	_, _ = quota.FetchAccountQuota(acc, true)
 
 	if err := storage.AddAccount(acc); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to save account: %v\n", err)
@@ -441,7 +446,7 @@ func handleAddKey(storage *account.Storage, args []string) {
 		UpdatedAt: time.Now(),
 	}
 
-	_, _ = quota.FetchAccountQuota(acc)
+	_, _ = quota.FetchAccountQuota(acc, false)
 	if err := storage.AddAccount(acc); err != nil {
 		fmt.Fprintf(os.Stderr, "Error saving account: %v\n", err)
 		os.Exit(1)
@@ -502,7 +507,7 @@ func handleExport(storage *account.Storage, args []string) {
 
 func handleImport(storage *account.Storage, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gemini-swap import <file-path | share-code>")
+		fmt.Fprintln(os.Stderr, "Usage: gemini-swap import <share-code | path-to-config.json>")
 		os.Exit(1)
 	}
 
@@ -514,7 +519,7 @@ func handleImport(storage *account.Storage, args []string) {
 	}
 
 	// Try fetching quota
-	_, _ = quota.FetchAccountQuota(acc)
+	_, _ = quota.FetchAccountQuota(acc, false)
 	_ = storage.AddAccount(acc)
 
 	fmt.Printf("\n✓ Account '%s' (%s) imported successfully!\n", acc.Name, acc.Email)
