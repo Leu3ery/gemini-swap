@@ -1,0 +1,259 @@
+import Foundation
+import Combine
+import AppKit
+
+class AppState: ObservableObject {
+    @Published var accounts: [Account] = []
+    @Published var activeAccountID: String = ""
+    @Published var proxyStats: ProxyStats? = nil
+    @Published var isRefreshing: Bool = false
+    @Published var isMenuBarOnly: Bool = false
+    @Published var lastRefreshed: Date? = nil
+    @Published var errorMessage: String? = nil
+
+    private var fileWatcherSource: DispatchSourceFileSystemObject?
+    private var fileDescriptor: Int32 = -1
+    private var statsTimer: Timer?
+
+    static let shared = AppState()
+
+    var activeAccount: Account? {
+        accounts.first(where: { $0.id == activeAccountID }) ?? accounts.first
+    }
+
+    var baseDir: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini-swap")
+    }
+
+    var accountsFileURL: URL {
+        baseDir.appendingPathComponent("accounts.json")
+    }
+
+    var statsFileURL: URL {
+        baseDir.appendingPathComponent("stats.json")
+    }
+
+    init() {
+        loadData()
+        startWatchingFiles()
+        startStatsTimer()
+    }
+
+    deinit {
+        stopWatchingFiles()
+        statsTimer?.invalidate()
+    }
+
+    func loadData() {
+        guard FileManager.default.fileExists(atPath: accountsFileURL.path) else {
+            // Trigger CLI to auto-import existing account if needed
+            runCLICommand(["list"])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.readAccountsFile()
+            }
+            return
+        }
+        readAccountsFile()
+        readStatsFile()
+    }
+
+    private func readAccountsFile() {
+        do {
+            let data = try Data(contentsOf: accountsFileURL)
+            let store = try JSONDecoder().decode(StoreData.self, from: data)
+            DispatchQueue.main.async {
+                self.accounts = store.accounts
+                self.activeAccountID = store.activeAccountID
+                self.lastRefreshed = Date()
+            }
+        } catch {
+            print("Failed to read accounts file: \(error)")
+        }
+    }
+
+    private func readStatsFile() {
+        guard FileManager.default.fileExists(atPath: statsFileURL.path) else { return }
+        do {
+            let data = try Data(contentsOf: statsFileURL)
+            let stats = try JSONDecoder().decode(ProxyStats.self, from: data)
+            DispatchQueue.main.async {
+                self.proxyStats = stats
+            }
+        } catch {
+            print("Failed to read stats file: \(error)")
+        }
+    }
+
+    func switchAccount(to id: String) {
+        guard let target = accounts.first(where: { $0.id == id }) else { return }
+
+        // Update local state
+        activeAccountID = id
+        
+        // Run CLI switch command to update all stores and ~/.gemini/
+        runCLICommand(["switch", id])
+
+        // Save local accounts.json
+        do {
+            let store = StoreData(
+                version: 1,
+                activeAccountID: id,
+                accounts: accounts,
+                proxyPort: 8045,
+                autoRotate: true,
+                lastUpdated: ISO8601DateFormatter().string(from: Date())
+            )
+            let data = try JSONEncoder().encode(store)
+            try data.write(to: accountsFileURL, options: .atomic)
+            syncToGeminiCLI(account: target)
+        } catch {
+            print("Error writing accounts file: \(error)")
+        }
+    }
+
+    func refreshQuotas() {
+        isRefreshing = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            self.runCLICommand(["quota"])
+            DispatchQueue.main.async {
+                self.readAccountsFile()
+                self.isRefreshing = false
+                self.lastRefreshed = Date()
+            }
+        }
+    }
+
+    func removeAccount(id: String) {
+        runCLICommand(["remove", id])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.readAccountsFile()
+        }
+    }
+
+    func addAPIKey(name: String, key: String, rpm: Int = 15, rpd: Int = 1500) {
+        runCLICommand(["add-key", "--name", name, "--key", key, "--rpm", "\(rpm)", "--rpd", "\(rpd)"])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.readAccountsFile()
+        }
+    }
+
+    func loginOAuth() {
+        runCLICommand(["login"])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.readAccountsFile()
+        }
+    }
+
+    private func syncToGeminiCLI(account: Account) {
+        let geminiDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini")
+        try? FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
+
+        if account.type == .oauth, let oauth = account.oauth {
+            let credsPath = geminiDir.appendingPathComponent("oauth_creds.json")
+            let accountsPath = geminiDir.appendingPathComponent("google_accounts.json")
+
+            let credsDict: [String: Any] = [
+                "access_token": oauth.accessToken,
+                "refresh_token": oauth.refreshToken ?? "",
+                "scope": oauth.scope ?? "",
+                "token_type": oauth.tokenType ?? "Bearer",
+                "id_token": oauth.idToken ?? "",
+                "expiry_date": oauth.expiryDate ?? 0
+            ]
+
+            if let credsData = try? JSONSerialization.data(withJSONObject: credsDict, options: .prettyPrinted) {
+                try? credsData.write(to: credsPath)
+            }
+
+            if let email = account.email {
+                let accDict: [String: Any] = [
+                    "active": email,
+                    "old": []
+                ]
+                if let accData = try? JSONSerialization.data(withJSONObject: accDict, options: .prettyPrinted) {
+                    try? accData.write(to: accountsPath)
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private func runCLICommand(_ arguments: [String]) -> String {
+        // Try local build bin or PATH
+        let possiblePaths = [
+            Bundle.main.resourcePath.map { "\($0)/gemini-swap" },
+            Bundle.main.bundlePath + "/Contents/MacOS/gemini-swap",
+            "/Users/leuzery/gemini_swap/bin/gemini-swap",
+            "/usr/local/bin/gemini-swap",
+            "/opt/homebrew/bin/gemini-swap"
+        ].compactMap { $0 }
+
+        var executable = "gemini-swap"
+        for p in possiblePaths {
+            if FileManager.default.isExecutableFile(atPath: p) {
+                executable = p
+                break
+            }
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable.hasPrefix("/") ? executable : "/usr/bin/env")
+        if !executable.hasPrefix("/") {
+            process.arguments = [executable] + arguments
+        } else {
+            process.arguments = arguments
+        }
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            print("Failed to run CLI command: \(error)")
+            return ""
+        }
+    }
+
+    private func startWatchingFiles() {
+        guard FileManager.default.fileExists(atPath: baseDir.path) else { return }
+
+        fileDescriptor = open(baseDir.path, O_EVTONLY)
+        guard fileDescriptor >= 0 else { return }
+
+        fileWatcherSource = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .extend, .attrib, .link],
+            queue: DispatchQueue.main
+        )
+
+        fileWatcherSource?.setEventHandler { [weak self] in
+            self?.readAccountsFile()
+            self?.readStatsFile()
+        }
+
+        fileWatcherSource?.setCancelHandler { [weak self] in
+            if let fd = self?.fileDescriptor, fd >= 0 {
+                close(fd)
+            }
+        }
+
+        fileWatcherSource?.resume()
+    }
+
+    private func stopWatchingFiles() {
+        fileWatcherSource?.cancel()
+        fileWatcherSource = nil
+    }
+
+    private func startStatsTimer() {
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            self?.readStatsFile()
+        }
+    }
+}

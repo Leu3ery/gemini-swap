@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Swap Dashboard</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: rgba(26, 34, 52, 0.85);
+      --card-border: #263353;
+      --text: #f1f5f9;
+      --text-dim: #94a3b8;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.35);
+      --green: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 30px 20px;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--card-border);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand svg { width: 36px; height: 36px; fill: var(--accent); }
+    h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+    .actions { display: flex; gap: 10px; }
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    button:hover { opacity: 0.9; transform: translateY(-1px); }
+    button.secondary { background: #1e293b; border: 1px solid var(--card-border); }
+    .account-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 22px;
+      margin-bottom: 18px;
+      position: relative;
+      backdrop-filter: blur(10px);
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .account-card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+    .card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+    .acc-info h3 { font-size: 18px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .badge-active { background: rgba(16, 185, 129, 0.2); color: var(--green); border: 1px solid var(--green); }
+    .badge-type { background: #334155; color: #cbd5e1; }
+    .acc-email { font-size: 13px; color: var(--text-dim); }
+    .bucket-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
+    .bucket {
+      background: rgba(15, 23, 42, 0.6);
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    .bucket-header { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; color: var(--text-dim); }
+    .progress-bar-bg {
+      background: #1e293b;
+      height: 8px;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+    .progress-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+    .fill-green { background: linear-gradient(90deg, #10b981, #34d399); }
+    .fill-amber { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .fill-red { background: linear-gradient(90deg, #ef4444, #f87171); }
+    .bucket-stats { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <svg viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
+        <div>
+          <h1>Gemini Swap</h1>
+          <p style="font-size: 13px; color: var(--text-dim);">Multi-Account Manager & Quota Monitor</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="secondary" onclick="refreshQuotas()">Refresh Quotas</button>
+      </div>
+    </header>
+
+    <div id="accounts-list">Loading accounts...</div>
+  </div>
+
+  <script>
+    async function loadData() {
+      try {
+        const res = await fetch('/api/accounts');
+        const data = await res.json();
+        render(data);
+      } catch (e) {
+        document.getElementById('accounts-list').innerHTML = '<p style="color:red">Failed to load accounts</p>';
+      }
+    }
+
+    async function switchAccount(id) {
+      await fetch('/api/switch?id=' + encodeURIComponent(id));
+      loadData();
+    }
+
+    async function refreshQuotas() {
+      document.getElementById('accounts-list').innerHTML = '<p style="color:var(--text-dim)">Refreshing quotas from Google...</p>';
+      await fetch('/api/refresh');
+      loadData();
+    }
+
+    function render(data) {
+      const activeId = data.active_account_id;
+      const list = document.getElementById('accounts-list');
+      if (!data.accounts || data.accounts.length === 0) {
+        list.innerHTML = '<p>No accounts configured yet. Use the CLI to login or add API keys.</p>';
+        return;
+      }
+
+      list.innerHTML = data.accounts.map(acc => {
+        const isActive = acc.id === activeId;
+        const typeBadge = acc.type === 'oauth' ? 'OAuth' : 'API Key';
+        let bucketsHtml = '';
+
+        if (acc.last_quota && acc.last_quota.buckets) {
+          bucketsHtml = '<div class="bucket-grid">' + acc.last_quota.buckets.map(b => {
+            const frac = b.remaining_fraction !== undefined ? b.remaining_fraction : 1.0;
+            const pct = Math.round(frac * 100);
+            let colorClass = 'fill-green';
+            if (pct < 30) colorClass = 'fill-red';
+            else if (pct < 60) colorClass = 'fill-amber';
+
+            return `
+              <div class="bucket">
+                <div class="bucket-header">
+                  <span>${b.model_id}</span>
+                  <span>${pct}%</span>
+                </div>
+                <div class="progress-bar-bg">
+                  <div class="progress-fill ${colorClass}" style="width: ${pct}%"></div>
+                </div>
+                <div class="bucket-stats">
+                  <span>${b.remaining_amount} / ${b.limit}</span>
+                  <span style="color:var(--text-dim); font-size:11px;">Reset in 24h</span>
+                </div>
+              </div>
+            `;
+          }).join('') + '</div>';
+        }
+
+        return `
+          <div class="account-card ${isActive ? 'active' : ''}">
+            <div class="card-top">
+              <div class="acc-info">
+                <h3>
+                  ${acc.name}
+                  ${isActive ? '<span class="badge badge-active">Active</span>' : ''}
+                  <span class="badge badge-type">${typeBadge}</span>
+                </h3>
+                <div class="acc-email">${acc.email || acc.id}</div>
+              </div>
+              <div>
+                ${!isActive ? `<button onclick="switchAccount('${acc.id}')">Switch</button>` : ''}
+              </div>
+            </div>
+            ${bucketsHtml}
+          </div>
+        `;
+      }).join('');
+    }
+
+    loadData();
+    setInterval(loadData, 10000);
+  </script>
+</body>
+</html>

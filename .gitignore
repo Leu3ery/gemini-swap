@@ -1,0 +1,13 @@
+node_modules/
+.tools/
+.env
+.env.*
+*.log
+dist/
+release/
+.DS_Store
+bin/
+macos/.build/
+*.exe
+*.dmg
+.gemini-swap/
