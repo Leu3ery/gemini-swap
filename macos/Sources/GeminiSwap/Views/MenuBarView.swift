@@ -45,12 +45,13 @@ struct MenuBarView: View {
                     }
 
                     // Mini Quota Bars
-                    if let quota = active.lastQuota, !quota.buckets.isEmpty {
+                    if let quota = active.lastQuota, !quota.allBuckets.isEmpty {
                         VStack(spacing: 6) {
-                            ForEach(quota.buckets) { bucket in
+                            ForEach(quota.allBuckets.prefix(4)) { bucket in
                                 HStack {
-                                    Text(bucket.modelID.contains("flash") ? "Flash" : (bucket.modelID.contains("pro") ? "Pro" : bucket.modelID))
+                                    Text(bucket.displayName)
                                         .font(.system(size: 11))
+                                        .lineLimit(1)
                                     Spacer()
                                     Text("\(bucket.percentage)%")
                                         .font(.system(size: 11, weight: .bold))
@@ -106,7 +107,7 @@ struct MenuBarView: View {
 
                                     Spacer()
 
-                                    if let quota = acc.lastQuota?.buckets.first {
+                                    if let quota = acc.lastQuota?.allBuckets.first {
                                         Text("\(quota.percentage)%")
                                             .font(.system(size: 10, weight: .medium))
                                             .foregroundColor(.secondary)

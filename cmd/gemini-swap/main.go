@@ -303,21 +303,48 @@ func handleQuota(storage *account.Storage, args []string) {
 		_ = storage.AddAccount(acc)
 
 		fmt.Printf("  Tier: %s\n", qInfo.Tier)
-		for _, b := range qInfo.Buckets {
-			pct := int(b.RemainingFraction * 100)
-			barLen := 20
-			filledLen := int(float64(barLen) * b.RemainingFraction)
-			if filledLen < 0 {
-				filledLen = 0
-			}
-			if filledLen > barLen {
-				filledLen = barLen
-			}
-			bar := strings.Repeat("█", filledLen) + strings.Repeat("░", barLen-filledLen)
+		if len(qInfo.Groups) > 0 {
+			for _, grp := range qInfo.Groups {
+				fmt.Printf("\n  %s:\n", grp.DisplayName)
+				for _, b := range grp.Buckets {
+					pct := int(b.RemainingFraction * 100)
+					barLen := 20
+					filledLen := int(float64(barLen) * b.RemainingFraction)
+					if filledLen < 0 {
+						filledLen = 0
+					}
+					if filledLen > barLen {
+						filledLen = barLen
+					}
+					bar := strings.Repeat("█", filledLen) + strings.Repeat("░", barLen-filledLen)
 
-			fmt.Printf("  %-20s [%s] %3d%% (%d / %d)\n", b.ModelID, bar, pct, b.RemainingAmount, b.Limit)
-			if b.ResetTime != "" {
-				fmt.Printf("    Reset Time: %s\n", b.ResetTime)
+					fmt.Printf("    %-26s [%s] %3d%%\n", b.DisplayName, bar, pct)
+					if b.Description != "" {
+						fmt.Printf("      %s\n", b.Description)
+					}
+				}
+			}
+		} else {
+			for _, b := range qInfo.Buckets {
+				pct := int(b.RemainingFraction * 100)
+				barLen := 20
+				filledLen := int(float64(barLen) * b.RemainingFraction)
+				if filledLen < 0 {
+					filledLen = 0
+				}
+				if filledLen > barLen {
+					filledLen = barLen
+				}
+				bar := strings.Repeat("█", filledLen) + strings.Repeat("░", barLen-filledLen)
+
+				label := b.DisplayName
+				if label == "" {
+					label = b.ModelID
+				}
+				fmt.Printf("  %-20s [%s] %3d%%\n", label, bar, pct)
+				if b.Description != "" {
+					fmt.Printf("    %s\n", b.Description)
+				}
 			}
 		}
 	}
@@ -466,7 +493,8 @@ func handleExport(storage *account.Storage, args []string) {
 	fmt.Println("Your friend can load it by running:")
 	fmt.Printf("  gemini-swap import %s\n", path)
 	fmt.Println("  OR")
-	fmt.Println("  gemini-swap import <share-code>\n")
+	fmt.Println("  gemini-swap import <share-code>")
+	fmt.Println()
 }
 
 func handleImport(storage *account.Storage, args []string) {

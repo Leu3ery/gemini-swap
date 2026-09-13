@@ -71,6 +71,7 @@ struct AccountCardView: View {
                             .foregroundColor(.secondary)
                     }
                     .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                     .frame(width: 20, height: 20)
                     .help("Export account config for friend")
 
@@ -92,14 +93,25 @@ struct AccountCardView: View {
                 }
             }
 
-            // Quotas
-            if let quota = account.lastQuota, !quota.buckets.isEmpty {
-                Divider()
-                    .padding(.vertical, 1)
+            // Antigravity & API Quotas
+            if let quota = account.lastQuota {
+                if let groups = quota.groups, !groups.isEmpty {
+                    Divider()
+                        .padding(.vertical, 2)
 
-                VStack(spacing: 8) {
-                    ForEach(quota.buckets) { bucket in
-                        QuotaBucketBar(bucket: bucket)
+                    VStack(spacing: 12) {
+                        ForEach(groups) { group in
+                            AntigravityQuotaGroupCard(group: group)
+                        }
+                    }
+                } else if let buckets = quota.buckets, !buckets.isEmpty {
+                    Divider()
+                        .padding(.vertical, 2)
+
+                    VStack(spacing: 8) {
+                        ForEach(buckets) { bucket in
+                            QuotaBucketBar(bucket: bucket)
+                        }
                     }
                 }
             }
@@ -113,6 +125,106 @@ struct AccountCardView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(isActive ? Color.blue.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
         )
+    }
+}
+
+struct CircularProgressRing: View {
+    let fraction: Double
+    var size: CGFloat = 20
+    var lineWidth: CGFloat = 2.75
+
+    var ringColor: Color {
+        if fraction < 0.20 {
+            return .red
+        } else if fraction < 0.50 {
+            return .orange
+        }
+        return .green
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.12), lineWidth: lineWidth)
+            Circle()
+                .trim(from: 0.0, to: max(0.001, min(1.0, CGFloat(fraction))))
+                .stroke(
+                    ringColor,
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+struct AntigravityQuotaGroupCard: View {
+    let group: QuotaGroup
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Group Header (e.g. Gemini Models) with info icon
+            HStack(spacing: 4) {
+                Text(group.displayName)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(.primary)
+
+                Image(systemName: "info.circle")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .help(group.description ?? group.displayName)
+
+                Spacer()
+            }
+
+            // Group Container
+            VStack(spacing: 0) {
+                ForEach(Array(group.buckets.enumerated()), id: \.element.id) { index, bucket in
+                    if index > 0 {
+                        Divider()
+                            .padding(.vertical, 4)
+                            .opacity(0.4)
+                    }
+
+                    HStack(alignment: .center, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(bucket.displayName)
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundColor(.primary)
+
+                            if let desc = bucket.description, !desc.isEmpty {
+                                Text(desc)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .lineLimit(2)
+                            }
+                        }
+
+                        Spacer(minLength: 8)
+
+                        HStack(spacing: 6) {
+                            Text("\(bucket.percentage)%")
+                                .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                                .foregroundColor(.primary)
+
+                            CircularProgressRing(fraction: bucket.remainingFraction)
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.primary.opacity(0.025))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.primary.opacity(0.07), lineWidth: 1)
+            )
+        }
     }
 }
 
@@ -135,9 +247,15 @@ struct QuotaBucketBar: View {
                     .font(.system(size: 11, weight: .regular))
                     .foregroundColor(.primary)
                 Spacer()
-                Text("\(bucket.percentage)% (\(bucket.remainingAmount) / \(bucket.limit))")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(.secondary)
+                if let rem = bucket.remainingAmount, let lim = bucket.limit, lim > 0 {
+                    Text("\(bucket.percentage)% (\(rem) / \(lim))")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("\(bucket.percentage)%")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
             }
 
             GeometryReader { geo in

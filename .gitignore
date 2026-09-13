@@ -11,3 +11,4 @@ macos/.build/
 *.exe
 *.dmg
 .gemini-swap/
+build/

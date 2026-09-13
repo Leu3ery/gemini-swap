@@ -24,15 +24,31 @@ struct OAuthData: Codable {
 }
 
 struct QuotaBucket: Codable, Identifiable {
-    var id: String { modelID }
-    var modelID: String
-    var remainingAmount: Int
+    var id: String {
+        if let bid = bucketID, !bid.isEmpty {
+            return bid
+        }
+        if let mid = modelID, !mid.isEmpty {
+            return mid
+        }
+        return displayName
+    }
+    var bucketID: String?
+    var modelID: String?
+    var customDisplayName: String?
+    var description: String?
+    var window: String?
+    var remainingAmount: Int?
     var remainingFraction: Double
-    var limit: Int
+    var limit: Int?
     var resetTime: String?
 
     enum CodingKeys: String, CodingKey {
+        case bucketID = "bucket_id"
         case modelID = "model_id"
+        case customDisplayName = "display_name"
+        case description = "description"
+        case window = "window"
         case remainingAmount = "remaining_amount"
         case remainingFraction = "remaining_fraction"
         case limit = "limit"
@@ -44,24 +60,54 @@ struct QuotaBucket: Codable, Identifiable {
     }
 
     var displayName: String {
-        if modelID.contains("flash") {
-            return "Gemini 2.5 Flash"
-        } else if modelID.contains("pro") {
-            return "Gemini 2.5 Pro"
+        if let name = customDisplayName, !name.isEmpty {
+            return name
         }
-        return modelID
+        if let mid = modelID {
+            if mid.contains("flash") {
+                return "Gemini 2.5 Flash"
+            } else if mid.contains("pro") {
+                return "Gemini 2.5 Pro"
+            }
+            return mid
+        }
+        return "Limit"
+    }
+}
+
+struct QuotaGroup: Codable, Identifiable {
+    var id: String { displayName }
+    var displayName: String
+    var description: String?
+    var buckets: [QuotaBucket]
+
+    enum CodingKeys: String, CodingKey {
+        case displayName = "display_name"
+        case description = "description"
+        case buckets = "buckets"
     }
 }
 
 struct QuotaInfo: Codable {
     var updatedAt: String
     var tier: String?
-    var buckets: [QuotaBucket]
+    var groups: [QuotaGroup]?
+    var buckets: [QuotaBucket]?
+    var description: String?
 
     enum CodingKeys: String, CodingKey {
         case updatedAt = "updated_at"
         case tier = "tier"
+        case groups = "groups"
         case buckets = "buckets"
+        case description = "description"
+    }
+
+    var allBuckets: [QuotaBucket] {
+        if let g = groups, !g.isEmpty {
+            return g.flatMap { $0.buckets }
+        }
+        return buckets ?? []
     }
 }
 

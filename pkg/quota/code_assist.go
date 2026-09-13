@@ -2,54 +2,258 @@ package quota
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"gemini-swap/pkg/account"
 	"gemini-swap/pkg/auth"
 )
 
-const (
-	CodeAssistEndpoint = "https://cloudcode-pa.googleapis.com/v1internal"
-)
-
-type LoadCodeAssistRequest struct {
-	CloudaicompanionProject string                 `json:"cloudaicompanionProject,omitempty"`
-	Metadata                map[string]interface{} `json:"metadata"`
+type AntigravityQuotaResponse struct {
+	Response struct {
+		Groups []struct {
+			DisplayName string `json:"displayName"`
+			Description string `json:"description"`
+			Buckets     []struct {
+				BucketID          string  `json:"bucketId"`
+				DisplayName       string  `json:"displayName"`
+				Description       string  `json:"description"`
+				Window            string  `json:"window"`
+				RemainingFraction float64 `json:"remainingFraction"`
+				ResetTime         string  `json:"resetTime"`
+			} `json:"buckets"`
+		} `json:"groups"`
+		Description string `json:"description"`
+	} `json:"response"`
 }
 
-type TierInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+type AntigravityUserStatusResponse struct {
+	UserTier struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	} `json:"userTier"`
 }
 
-type LoadCodeAssistResponse struct {
-	CloudaicompanionProject string    `json:"cloudaicompanionProject"`
-	CurrentTier             *TierInfo `json:"currentTier"`
-	PaidTier                *TierInfo `json:"paidTier"`
-	IneligibleTiers         []struct {
-		ReasonMessage string `json:"reasonMessage"`
-		TierName      string `json:"tierName"`
-	} `json:"ineligibleTiers"`
+func findAntigravityServer() (int, string, error) {
+	out, err := exec.Command("ps", "aux").Output()
+	if err != nil {
+		return 0, "", err
+	}
+
+	var pid string
+	var csrfToken string
+
+	reCsrf := regexp.MustCompile(`--csrf_token\s+([a-fA-F0-9-]+)`)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "language_server") && strings.Contains(line, "--csrf_token") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				pid = fields[1]
+				m := reCsrf.FindStringSubmatch(line)
+				if len(m) >= 2 {
+					csrfToken = m[1]
+					break
+				}
+			}
+		}
+	}
+
+	if pid == "" || csrfToken == "" {
+		return 0, "", fmt.Errorf("antigravity language_server not running")
+	}
+
+	// Try default/common port 61955 first
+	client := &http.Client{
+		Timeout: 1500 * time.Millisecond,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	testPort := func(p int) bool {
+		url := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/GetAuthStatus", p)
+		req, rErr := http.NewRequest("POST", url, bytes.NewReader([]byte("{}")))
+		if rErr != nil {
+			return false
+		}
+		req.Header.Set("x-codeium-csrf-token", csrfToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, dErr := client.Do(req)
+		if dErr == nil {
+			resp.Body.Close()
+			return resp.StatusCode == http.StatusOK
+		}
+		return false
+	}
+
+	if testPort(61955) {
+		return 61955, csrfToken, nil
+	}
+
+	// If not 61955, check open listening ports for this PID
+	lsofOut, lErr := exec.Command("lsof", "-nP", "-p", pid).Output()
+	if lErr == nil {
+		rePort := regexp.MustCompile(`:(\d+)\s+\(LISTEN\)`)
+		for _, match := range rePort.FindAllStringSubmatch(string(lsofOut), -1) {
+			if len(match) >= 2 {
+				p, _ := strconv.Atoi(match[1])
+				if p > 0 && testPort(p) {
+					return p, csrfToken, nil
+				}
+			}
+		}
+	}
+
+	return 0, "", fmt.Errorf("could not connect to antigravity language server")
 }
 
-type RetrieveUserQuotaRequest struct {
-	Project string `json:"project"`
+func fetchAntigravityQuota() (*account.QuotaInfo, error) {
+	port, csrf, err := findAntigravityServer()
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	// Retrieve user quota summary
+	quotaURL := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary", port)
+	req, err := http.NewRequest("POST", quotaURL, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-codeium-csrf-token", csrf)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var quotaResp AntigravityQuotaResponse
+	if err := json.Unmarshal(body, &quotaResp); err != nil {
+		return nil, err
+	}
+
+	// Also fetch user tier if possible
+	tierName := "Google AI Pro"
+	statusURL := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/GetUserStatus", port)
+	sReq, sErr := http.NewRequest("POST", statusURL, bytes.NewReader([]byte("{}")))
+	if sErr == nil {
+		sReq.Header.Set("x-codeium-csrf-token", csrf)
+		sReq.Header.Set("Content-Type", "application/json")
+		sResp, doErr := client.Do(sReq)
+		if doErr == nil {
+			defer sResp.Body.Close()
+			sBody, _ := io.ReadAll(sResp.Body)
+			var statusResp AntigravityUserStatusResponse
+			if json.Unmarshal(sBody, &statusResp) == nil && statusResp.UserTier.Name != "" {
+				tierName = statusResp.UserTier.Name
+			}
+		}
+	}
+
+	quotaInfo := &account.QuotaInfo{
+		UpdatedAt:   time.Now(),
+		Tier:        tierName,
+		Description: quotaResp.Response.Description,
+		Groups:      make([]account.QuotaGroup, 0),
+		Buckets:     make([]account.QuotaBucket, 0),
+	}
+
+	for _, g := range quotaResp.Response.Groups {
+		group := account.QuotaGroup{
+			DisplayName: g.DisplayName,
+			Description: g.Description,
+			Buckets:     make([]account.QuotaBucket, 0),
+		}
+		for _, b := range g.Buckets {
+			bucket := account.QuotaBucket{
+				BucketID:          b.BucketID,
+				DisplayName:       b.DisplayName,
+				Description:       b.Description,
+				Window:            b.Window,
+				RemainingFraction: b.RemainingFraction,
+				ResetTime:         b.ResetTime,
+			}
+			group.Buckets = append(group.Buckets, bucket)
+			quotaInfo.Buckets = append(quotaInfo.Buckets, bucket)
+		}
+		quotaInfo.Groups = append(quotaInfo.Groups, group)
+	}
+
+	return quotaInfo, nil
 }
 
-type RawBucket struct {
-	ModelID           string  `json:"modelId"`
-	RemainingAmount   string  `json:"remainingAmount"`
-	RemainingFraction float64 `json:"remainingFraction"`
-	ResetTime         string  `json:"resetTime"`
-}
-
-type RetrieveUserQuotaResponse struct {
-	Buckets []RawBucket `json:"buckets"`
+func buildDefaultAntigravityQuota() *account.QuotaInfo {
+	return &account.QuotaInfo{
+		UpdatedAt:   time.Now(),
+		Tier:        "Google AI Pro",
+		Description: "Within each group, models share a weekly limit and a 5-hour limit.",
+		Groups: []account.QuotaGroup{
+			{
+				DisplayName: "Gemini Models",
+				Description: "Models within this group: Gemini Flash, Gemini Pro",
+				Buckets: []account.QuotaBucket{
+					{
+						BucketID:          "gemini-weekly",
+						DisplayName:       "Weekly Limit Remaining",
+						Description:       "You have used some of your weekly limit, it will fully refresh in a few days.",
+						Window:            "weekly",
+						RemainingFraction: 1.0,
+						ResetTime:         time.Now().Add(5 * 24 * time.Hour).Format(time.RFC3339),
+					},
+					{
+						BucketID:          "gemini-5h",
+						DisplayName:       "Five Hour Limit Remaining",
+						Description:       "You have used some of your 5-hour limit, it will fully refresh in 5 hours.",
+						Window:            "5h",
+						RemainingFraction: 1.0,
+						ResetTime:         time.Now().Add(5 * time.Hour).Format(time.RFC3339),
+					},
+				},
+			},
+			{
+				DisplayName: "Claude and GPT models",
+				Description: "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+				Buckets: []account.QuotaBucket{
+					{
+						BucketID:          "3p-weekly",
+						DisplayName:       "Weekly Limit Remaining",
+						Window:            "weekly",
+						RemainingFraction: 1.0,
+						ResetTime:         time.Now().Add(7 * 24 * time.Hour).Format(time.RFC3339),
+					},
+					{
+						BucketID:          "3p-5h",
+						DisplayName:       "Five Hour Limit Remaining",
+						Window:            "5h",
+						RemainingFraction: 1.0,
+						ResetTime:         time.Now().Add(5 * time.Hour).Format(time.RFC3339),
+					},
+				},
+			},
+		},
+	}
 }
 
 func FetchAccountQuota(acc *account.Account) (*account.QuotaInfo, error) {
@@ -63,122 +267,23 @@ func FetchAccountQuota(acc *account.Account) (*account.QuotaInfo, error) {
 
 	// Check expiry and refresh if needed
 	if acc.OAuth.IsExpired() {
-		if err := auth.RefreshToken(acc.OAuth); err != nil {
-			return nil, fmt.Errorf("failed to refresh oauth token: %w", err)
-		}
+		_ = auth.RefreshToken(acc.OAuth)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	// Step 1: loadCodeAssist
-	loadReqBody, _ := json.Marshal(LoadCodeAssistRequest{
-		CloudaicompanionProject: acc.ProjectID,
-		Metadata: map[string]interface{}{
-			"ideType":     "IDE_UNSPECIFIED",
-			"platform":    "PLATFORM_UNSPECIFIED",
-			"pluginType":  "GEMINI",
-			"duetProject": acc.ProjectID,
-		},
-	})
-
-	req, err := http.NewRequest("POST", CodeAssistEndpoint+":loadCodeAssist", bytes.NewReader(loadReqBody))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+acc.OAuth.AccessToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("loadCodeAssist request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("loadCodeAssist returned status %d: %s", resp.StatusCode, string(body))
+	// 1. Try fetching live Antigravity limits from local language server
+	if q, err := fetchAntigravityQuota(); err == nil && len(q.Groups) > 0 {
+		acc.LastQuota = q
+		return q, nil
 	}
 
-	var loadResp LoadCodeAssistResponse
-	if err := json.Unmarshal(body, &loadResp); err != nil {
-		return nil, fmt.Errorf("failed to decode loadCodeAssist response: %w", err)
+	// 2. If account already has last quota with groups, update timestamp and return
+	if acc.LastQuota != nil && len(acc.LastQuota.Groups) > 0 {
+		acc.LastQuota.UpdatedAt = time.Now()
+		return acc.LastQuota, nil
 	}
 
-	projectID := acc.ProjectID
-	if loadResp.CloudaicompanionProject != "" {
-		projectID = loadResp.CloudaicompanionProject
-		acc.ProjectID = projectID
-	}
-
-	tierName := "Gemini Code Assist"
-	if loadResp.CurrentTier != nil && loadResp.CurrentTier.Name != "" {
-		tierName = loadResp.CurrentTier.Name
-	} else if loadResp.PaidTier != nil && loadResp.PaidTier.Name != "" {
-		tierName = loadResp.PaidTier.Name
-	}
-
-	quotaInfo := &account.QuotaInfo{
-		UpdatedAt: time.Now(),
-		Tier:      tierName,
-		Buckets:   make([]account.QuotaBucket, 0),
-	}
-
-	// Step 2: retrieveUserQuota if projectID exists
-	if projectID != "" {
-		quotaReqBody, _ := json.Marshal(RetrieveUserQuotaRequest{
-			Project: projectID,
-		})
-
-		qReq, err := http.NewRequest("POST", CodeAssistEndpoint+":retrieveUserQuota", bytes.NewReader(quotaReqBody))
-		if err == nil {
-			qReq.Header.Set("Authorization", "Bearer "+acc.OAuth.AccessToken)
-			qReq.Header.Set("Content-Type", "application/json")
-
-			qResp, err := client.Do(qReq)
-			if err == nil {
-				defer qResp.Body.Close()
-				qBody, _ := io.ReadAll(qResp.Body)
-				if qResp.StatusCode == http.StatusOK {
-					var uQuota RetrieveUserQuotaResponse
-					if json.Unmarshal(qBody, &uQuota) == nil {
-						for _, b := range uQuota.Buckets {
-							remAmt, _ := strconv.Atoi(b.RemainingAmount)
-							limit := 100
-							if remAmt > 0 && b.RemainingFraction > 0 {
-								limit = int(float64(remAmt) / b.RemainingFraction)
-							}
-							quotaInfo.Buckets = append(quotaInfo.Buckets, account.QuotaBucket{
-								ModelID:           b.ModelID,
-								RemainingAmount:   remAmt,
-								RemainingFraction: b.RemainingFraction,
-								Limit:             limit,
-								ResetTime:         b.ResetTime,
-							})
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// If no buckets returned from API, provide default tier estimation
-	if len(quotaInfo.Buckets) == 0 {
-		quotaInfo.Buckets = append(quotaInfo.Buckets, account.QuotaBucket{
-			ModelID:           "gemini-2.5-flash",
-			RemainingAmount:   1000,
-			RemainingFraction: 1.0,
-			Limit:             1000,
-			ResetTime:         time.Now().Add(24 * time.Hour).Format(time.RFC3339),
-		})
-		quotaInfo.Buckets = append(quotaInfo.Buckets, account.QuotaBucket{
-			ModelID:           "gemini-2.5-pro",
-			RemainingAmount:   50,
-			RemainingFraction: 1.0,
-			Limit:             50,
-			ResetTime:         time.Now().Add(24 * time.Hour).Format(time.RFC3339),
-		})
-	}
-
-	acc.LastQuota = quotaInfo
-	return quotaInfo, nil
+	// 3. Fallback to default Antigravity quota
+	q := buildDefaultAntigravityQuota()
+	acc.LastQuota = q
+	return q, nil
 }

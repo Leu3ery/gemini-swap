@@ -29,17 +29,29 @@ func (o *OAuthData) IsExpired() bool {
 }
 
 type QuotaBucket struct {
-	ModelID           string  `json:"model_id"`
-	RemainingAmount   int     `json:"remaining_amount"`
+	BucketID          string  `json:"bucket_id,omitempty"`
+	ModelID           string  `json:"model_id,omitempty"`
+	DisplayName       string  `json:"display_name,omitempty"`
+	Description       string  `json:"description,omitempty"`
+	Window            string  `json:"window,omitempty"`
+	RemainingAmount   int     `json:"remaining_amount,omitempty"`
 	RemainingFraction float64 `json:"remaining_fraction"`
-	Limit             int     `json:"limit"`
-	ResetTime         string  `json:"reset_time"`
+	Limit             int     `json:"limit,omitempty"`
+	ResetTime         string  `json:"reset_time,omitempty"`
+}
+
+type QuotaGroup struct {
+	DisplayName string        `json:"display_name"`
+	Description string        `json:"description,omitempty"`
+	Buckets     []QuotaBucket `json:"buckets"`
 }
 
 type QuotaInfo struct {
-	UpdatedAt time.Time     `json:"updated_at"`
-	Tier      string        `json:"tier,omitempty"`
-	Buckets   []QuotaBucket `json:"buckets"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+	Tier        string        `json:"tier,omitempty"`
+	Groups      []QuotaGroup  `json:"groups,omitempty"`
+	Buckets     []QuotaBucket `json:"buckets,omitempty"`
+	Description string        `json:"description,omitempty"`
 }
 
 type Account struct {

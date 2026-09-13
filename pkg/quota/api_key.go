@@ -56,9 +56,36 @@ func FetchAPIKeyQuota(acc *account.Account) (*account.QuotaInfo, error) {
 	quotaInfo := &account.QuotaInfo{
 		UpdatedAt: time.Now(),
 		Tier:      "AI Studio API Key",
+		Groups: []account.QuotaGroup{
+			{
+				DisplayName: "API Models",
+				Description: "Google AI Studio Limits",
+				Buckets: []account.QuotaBucket{
+					{
+						BucketID:          "gemini-flash",
+						DisplayName:       "Gemini 2.5 Flash",
+						Description:       fmt.Sprintf("%d requests per day limit (%d RPM)", rpd, rpm),
+						RemainingAmount:   rpd,
+						RemainingFraction: 1.0,
+						Limit:             rpd,
+						ResetTime:         time.Now().Truncate(24 * time.Hour).Add(24 * time.Hour).Format(time.RFC3339),
+					},
+					{
+						BucketID:          "gemini-pro",
+						DisplayName:       "Gemini 2.5 Pro",
+						Description:       "50 requests per day limit (2 RPM)",
+						RemainingAmount:   50,
+						RemainingFraction: 1.0,
+						Limit:             50,
+						ResetTime:         time.Now().Truncate(24 * time.Hour).Add(24 * time.Hour).Format(time.RFC3339),
+					},
+				},
+			},
+		},
 		Buckets: []account.QuotaBucket{
 			{
 				ModelID:           "gemini-2.5-flash",
+				DisplayName:       "Gemini 2.5 Flash",
 				RemainingAmount:   rpd,
 				RemainingFraction: 1.0,
 				Limit:             rpd,
@@ -66,6 +93,7 @@ func FetchAPIKeyQuota(acc *account.Account) (*account.QuotaInfo, error) {
 			},
 			{
 				ModelID:           "gemini-2.5-pro",
+				DisplayName:       "Gemini 2.5 Pro",
 				RemainingAmount:   50,
 				RemainingFraction: 1.0,
 				Limit:             50,
