@@ -20,7 +20,7 @@ import (
 	"gemini-swap/pkg/web"
 )
 
-const Version = "1.0.0"
+const Version = "1.1.5"
 
 func main() {
 	if len(os.Args) < 2 {
