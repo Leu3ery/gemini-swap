@@ -90,21 +90,6 @@ struct MainWindowView: View {
                             .font(.system(size: 14, weight: .bold))
                             .foregroundColor(.secondary)
 
-                        if let switching = appState.switchingAccount,
-                           let status = appState.switchingStatusText {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                TimelineView(.periodic(from: appState.switchStartedAt ?? .now, by: 1)) { context in
-                                    let elapsed = max(0, Int(context.date.timeIntervalSince(appState.switchStartedAt ?? context.date)))
-                                    Text("\(status) \(switching.name) · \(elapsed)s")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .accessibilityElement(children: .combine)
-                        }
-
                         if appState.accounts.isEmpty {
                             VStack(spacing: 12) {
                                 Image(systemName: "person.crop.circle.badge.plus")
@@ -154,36 +139,6 @@ struct MainWindowView: View {
                 .padding(20)
             }
 
-            Divider()
-
-            // Bottom Footer / Status
-            HStack {
-                if let active = appState.activeAccount {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 6, height: 6)
-                        Text("Active: \(active.name)")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-                } else {
-                    Text("No active account")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                if let lastRef = appState.lastRefreshed {
-                    Text("Updated: \(lastRef.formatted(date: .omitted, time: .standard))")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-            .background(Color(NSColor.windowBackgroundColor))
         }
         .frame(minWidth: 580, minHeight: 380)
         .sheet(isPresented: $showAddAccountSheet) {
