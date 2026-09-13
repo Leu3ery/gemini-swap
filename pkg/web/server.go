@@ -10,6 +10,7 @@ import (
 
 	"gemini-swap/pkg/account"
 	"gemini-swap/pkg/quota"
+	"gemini-swap/pkg/session"
 )
 
 //go:embed index.html
@@ -46,7 +47,7 @@ func (s *Server) Start(ctx context.Context) error {
 			http.Error(w, "missing id", http.StatusBadRequest)
 			return
 		}
-		acc, err := s.storage.SetActiveAccount(id)
+		acc, err := session.SwitchTo(s.storage, id, session.Options{})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -61,8 +62,13 @@ func (s *Server) Start(ctx context.Context) error {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		sessID := quota.SessionAccountID(store)
 		for _, a := range store.Accounts {
-			_, _ = quota.FetchAccountQuota(a, a.ID == store.ActiveAccountID)
+			isLive := a.ID == sessID
+			if sessID == "" && a.ID == store.ActiveAccountID {
+				isLive = true
+			}
+			_, _ = quota.FetchAccountQuota(a, isLive)
 		}
 		_ = s.storage.Save(store)
 		w.Header().Set("Content-Type", "application/json")

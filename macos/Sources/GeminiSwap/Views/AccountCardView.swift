@@ -3,6 +3,9 @@ import SwiftUI
 struct AccountCardView: View {
     let account: Account
     let isActive: Bool
+    let switchingText: String?
+    let switchStartedAt: Date?
+    let switchingDisabled: Bool
     let onSwitch: () -> Void
     let onRemove: () -> Void
     let onExportFile: () -> Void
@@ -75,12 +78,27 @@ struct AccountCardView: View {
                     .frame(width: 20, height: 20)
                     .help("Export account config for friend")
 
-                    if !isActive {
+                    if let switchingText = switchingText {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            TimelineView(.periodic(from: switchStartedAt ?? .now, by: 1)) { context in
+                                let elapsed = max(0, Int(context.date.timeIntervalSince(switchStartedAt ?? context.date)))
+                                Text("\(switchingText) \(elapsed)s")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    } else if !isActive {
                         Button(action: onSwitch) {
-                            Text("Switch")
+                            Text(account.type == .oauth && account.oauth?.client != "antigravity" ? "Authorize & Switch" : "Switch")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
+                        .disabled(switchingDisabled)
+                        .help(account.type == .oauth && account.oauth?.client != "antigravity"
+                            ? "One-time Google authorization is required before Antigravity can use this account"
+                            : "Switch Antigravity to this account")
                     }
 
                     Button(action: onRemove) {
@@ -89,6 +107,7 @@ struct AccountCardView: View {
                             .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
+                    .disabled(switchingDisabled)
                     .help("Remove account")
                 }
             }

@@ -16,6 +16,7 @@ import (
 	"gemini-swap/pkg/auth"
 	"gemini-swap/pkg/proxy"
 	"gemini-swap/pkg/quota"
+	"gemini-swap/pkg/session"
 	"gemini-swap/pkg/web"
 )
 
@@ -61,13 +62,17 @@ func main() {
 		handleProxy(storage, args)
 	case "web":
 		handleWeb(storage, args)
+	case "resync", "import-antigravity":
+		handleResync(storage, args)
+	case "restore-antigravity":
+		handleRestoreAntigravity(storage, args)
 	case "version", "-v", "--version":
 		fmt.Printf("gemini-swap version %s\n", Version)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
 		// Check if the command matches an account name/email to switch directly
-		acc, sErr := storage.SetActiveAccount(command)
+		acc, sErr := session.SwitchTo(storage, command, session.Options{})
 		if sErr == nil {
 			fmt.Printf("✓ Switched active account to: %s (%s)\n", acc.Name, acc.Email)
 			return
@@ -88,11 +93,14 @@ CORE COMMANDS:
   switch <id|email>    Switch the active Gemini account seamlessly
   current              Show details of currently active account
   quota [id|email]     Fetch latest quota and rate limits from Google
-  login [--headless]   Log in to a new Google account via OAuth
+  login [--headless] [--ide] [--email address] Log in via Google OAuth
+                             (--ide mints IDE-durable tokens switchable inside Antigravity)
   add-key              Add a Gemini AI Studio API key
   remove <id|email>    Remove an account
   export <id|email>    Export account config to a shareable file or code
   import <file|code>   Import account config from a friend
+  resync               Import the live Antigravity IDE session (keychain) as an account
+  restore-antigravity  Restore a backed-up Antigravity session (after a rejected switch)
 
 INTEGRATION & TOOLS:
   exec -- <cmd...>     Run a command with active Gemini credentials injected
@@ -153,6 +161,9 @@ func handleList(storage *account.Storage, args []string) {
 			for _, b := range acc.LastQuota.Buckets {
 				pct := int(b.RemainingFraction * 100)
 				shortName := b.ModelID
+				if shortName == "" {
+					shortName = b.DisplayName
+				}
 				if strings.Contains(shortName, "flash") {
 					shortName = "Flash"
 				} else if strings.Contains(shortName, "pro") {
@@ -177,23 +188,42 @@ func handleList(storage *account.Storage, args []string) {
 }
 
 func handleSwitch(storage *account.Storage, args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gemini-swap switch <account-id | email | name>")
+	target := ""
+	noRestart := false
+	for _, a := range args {
+		if a == "--no-restart" {
+			noRestart = true
+		} else if !strings.HasPrefix(a, "-") && target == "" {
+			target = a
+		}
+	}
+	if target == "" {
+		fmt.Fprintln(os.Stderr, "Usage: gemini-swap switch <account-id | email | name> [--no-restart]")
 		os.Exit(1)
 	}
 
-	target := args[0]
-	acc, err := storage.SetActiveAccount(target)
+	acc, err := session.SwitchTo(storage, target, session.Options{NoRestart: noRestart})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Printf("✓ Active account switched to: %s (%s)\n", acc.Name, acc.Email)
-	fmt.Println("  Synchronized ~/.gemini/oauth_creds.json and ~/.gemini/google_accounts.json")
-	if acc.Type == account.TypeOAuth {
-		fmt.Println("  Synchronized Google Antigravity session & credentials")
-		fmt.Println("  (To apply to an already open Antigravity IDE: reload window or restart Antigravity)")
+	if acc.Type == account.TypeAPIKey {
+		fmt.Println("  API-key accounts work via env / proxy only:")
+		fmt.Println("    eval $(gemini-swap current --env)   # or: gemini-swap exec -- <cmd>")
+		fmt.Println("    ~/.gemini/oauth_creds.json left untouched (Gemini CLI / Antigravity keep using OAuth).")
+	} else {
+		fmt.Println("  Synchronized ~/.gemini/oauth_creds.json and ~/.gemini/google_accounts.json")
+	}
+	if acc.Type == account.TypeOAuth && acc.OAuth != nil && acc.OAuth.Client == "antigravity" {
+		if noRestart {
+			fmt.Println("  Antigravity credentials staged; reload the IDE window to apply")
+		} else {
+			fmt.Println("  Antigravity confirmed the active account")
+		}
+	} else if acc.Type == account.TypeOAuth {
+		fmt.Println("  Antigravity IDE untouched (keeps its current session — see note above).")
 	}
 }
 
@@ -297,15 +327,25 @@ func handleQuota(storage *account.Storage, args []string) {
 	}
 
 	fmt.Println("\nFetching latest usage & quotas from Google...")
+	// Live numbers always come from the IDE's current session, so only the
+	// matching account gets a live refresh; the rest show last-known data.
+	sessID := quota.SessionAccountID(store)
 	for _, acc := range targets {
+		isLive := acc.ID == sessID
+		if sessID == "" && acc.ID == store.ActiveAccountID {
+			isLive = true // IDE closed/unknown — legacy fallback to active
+		}
 		fmt.Printf("\n=== %s (%s) ===\n", acc.Name, acc.Type)
-		qInfo, qErr := quota.FetchAccountQuota(acc, acc.ID == store.ActiveAccountID)
+		qInfo, qErr := quota.FetchAccountQuota(acc, isLive)
 		if qErr != nil {
 			fmt.Printf("  Failed to retrieve quota: %v\n", qErr)
 			continue
 		}
 		_ = storage.AddAccount(acc)
 
+		if !isLive && acc.Type == account.TypeOAuth {
+			fmt.Printf("  (last known data from %s — switch to this account for live numbers)\n", qInfo.UpdatedAt.Format("2006-01-02 15:04"))
+		}
 		fmt.Printf("  Tier: %s\n", qInfo.Tier)
 		if len(qInfo.Groups) > 0 {
 			for _, grp := range qInfo.Groups {
@@ -357,10 +397,25 @@ func handleQuota(storage *account.Storage, args []string) {
 
 func handleLogin(storage *account.Storage, args []string) {
 	headless := false
-	for _, a := range args {
+	ide := false
+	loginHint := ""
+	for i, a := range args {
 		if a == "--headless" || a == "--manual" || a == "-m" {
 			headless = true
 		}
+		if a == "--ide" {
+			ide = true
+		}
+		if (a == "--email" || a == "--login-hint") && i+1 < len(args) {
+			loginHint = args[i+1]
+		}
+	}
+
+	cfg := auth.GeminiClient()
+	if ide {
+		cfg = auth.AntigravityClient()
+		fmt.Println("IDE login: tokens are minted by Antigravity's own OAuth client,")
+		fmt.Println("so the switched IDE session stays signed in durably.")
 	}
 
 	ctx := context.Background()
@@ -368,9 +423,14 @@ func handleLogin(storage *account.Storage, args []string) {
 	var err error
 
 	if headless {
-		acc, err = auth.LoginHeadless(ctx)
+		acc, err = auth.LoginHeadlessAs(ctx, cfg)
 	} else {
-		acc, err = auth.LoginWithBrowser(ctx)
+		acc, err = auth.LoginWithBrowserAsHint(ctx, cfg, loginHint)
+	}
+
+	if err == nil && loginHint != "" && !strings.EqualFold(acc.Email, loginHint) {
+		fmt.Fprintf(os.Stderr, "Sign-in cancelled: selected %s, but the requested account was %s.\n", acc.Email, loginHint)
+		return
 	}
 
 	if err != nil {
@@ -378,11 +438,20 @@ func handleLogin(storage *account.Storage, args []string) {
 		os.Exit(1)
 	}
 
-	// Fetch initial quota
-	_, _ = quota.FetchAccountQuota(acc, true)
+	// Don't fetch live quota here: the IDE still runs the previous session,
+	// so live numbers would be misattributed to this new account. Quotas
+	// populate on the next refresh after the switch applies.
+	_, _ = quota.FetchAccountQuota(acc, false)
 
 	if err := storage.AddAccount(acc); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to save account: %v\n", err)
+		os.Exit(1)
+	}
+
+	// New logins must become active (AddAccount alone only activates the very first account).
+	// Route through the safe switch so IDE files/restart rules apply.
+	if _, err := session.SwitchTo(storage, acc.ID, session.Options{}); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to activate the new account: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -588,6 +657,80 @@ func handleProxy(storage *account.Storage, args []string) {
 		fmt.Fprintf(os.Stderr, "Proxy error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func handleResync(storage *account.Storage, args []string) {
+	// Import the live Antigravity IDE session (macOS Keychain, fallback: jetski
+	// token file) as a gemini-swap account. This is the account currently open
+	// in Antigravity, which may differ from ~/.gemini/oauth_creds.json.
+	token, err := account.ReadAntigravitySessionToken()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "No Antigravity session found: %v\n", err)
+		os.Exit(1)
+	}
+
+	userInfo, err := auth.FetchUserInfo(token.AccessToken)
+	if err != nil && token.RefreshToken != "" {
+		// Access token may be expired — refresh (tries Gemini + Antigravity clients)
+		// and retry once.
+		if rErr := auth.RefreshToken(token); rErr == nil {
+			userInfo, err = auth.FetchUserInfo(token.AccessToken)
+		}
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to identify Antigravity session account: %v\n", err)
+		os.Exit(1)
+	}
+
+	acc := &account.Account{
+		ID:        "google-" + userInfo.ID,
+		Type:      account.TypeOAuth,
+		Name:      userInfo.Name,
+		Email:     userInfo.Email,
+		Picture:   userInfo.Picture,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		OAuth: &account.OAuthData{
+			AccessToken:  token.AccessToken,
+			RefreshToken: token.RefreshToken,
+			TokenType:    token.TokenType,
+			ExpiryDate:   token.ExpiryDate,
+			Client:       "antigravity",
+		},
+	}
+	if acc.Name == "" {
+		acc.Name = userInfo.Email
+	}
+
+	if err := storage.AddAccount(acc); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save account: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := storage.SetActiveAccount(acc.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: imported but failed to activate: %v\n", err)
+	}
+
+	fmt.Printf("\n✓ Imported live Antigravity session: %s (%s)\n", acc.Name, acc.Email)
+	fmt.Printf("  Set as active account!\n\n")
+}
+
+func handleRestoreAntigravity(storage *account.Storage, args []string) {
+	path := ""
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			path = a
+		}
+	}
+	_ = storage
+	if err := account.RestoreAntigravitySession(path); err != nil {
+		fmt.Fprintf(os.Stderr, "Restore failed: %v\n", err)
+		os.Exit(1)
+	}
+	if err := account.RestartAntigravityLanguageServer(); err != nil {
+		fmt.Fprintf(os.Stderr, "Session files restored, but could not reload Antigravity (%v). Reload the Antigravity window manually.\n", err)
+		return
+	}
+	fmt.Println("✓ Antigravity session restored. Check the IDE window — it should be signed back in.")
 }
 
 func handleWeb(storage *account.Storage, args []string) {

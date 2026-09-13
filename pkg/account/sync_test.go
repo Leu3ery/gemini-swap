@@ -27,6 +27,7 @@ func TestSyncToAntigravity(t *testing.T) {
 			TokenType:    "Bearer",
 			ExpiryDate:   time.Now().Add(1 * time.Hour).UnixMilli(),
 			Scope:        "openid email profile",
+			Client:       "antigravity",
 		},
 	}
 
@@ -59,5 +60,28 @@ func TestSyncToAntigravity(t *testing.T) {
 	}
 	if st.Token.Expiry == "" {
 		t.Error("Expected non-empty expiry timestamp")
+	}
+}
+
+func TestSyncToAntigravityRejectsLegacyToken(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("GEMINI_SWAP_SKIP_KEYCHAIN", "1")
+
+	acc := &Account{
+		Type: TypeOAuth,
+		OAuth: &OAuthData{
+			AccessToken:  "legacy-access-token",
+			RefreshToken: "legacy-refresh-token",
+			Client:       "gemini",
+		},
+	}
+
+	if err := SyncToAntigravity(acc); err != nil {
+		t.Fatalf("legacy token should be ignored safely: %v", err)
+	}
+	path := filepath.Join(tmpHome, ".gemini", "jetski-standalone-oauth-token")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("legacy token unexpectedly created Antigravity credentials at %s", path)
 	}
 }

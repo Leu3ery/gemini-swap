@@ -56,23 +56,77 @@ struct AddAccountSheet: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
 
+                    if isSubmitting {
+                        ProgressView("Waiting for browser sign-in…")
+                            .font(.system(size: 12))
+                            .padding(.top, 10)
+                    }
+
+                    if let err = errorMessage {
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundColor(.red)
+                            .multilineTextAlignment(.center)
+                    }
+
                     Button(action: {
                         isSubmitting = true
-                        appState.loginOAuth()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            dismiss()
+                        errorMessage = nil
+                        appState.loginOAuth(ide: true) { success, msg in
+                            isSubmitting = false
+                            if success {
+                                dismiss()
+                            } else {
+                                errorMessage = msg
+                            }
                         }
                     }) {
                         HStack {
                             Image(systemName: "globe")
-                            Text("Sign in with Google in Browser")
+                            Text("Sign in to Antigravity with Google")
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.blue)
                     .controlSize(.large)
+                    .disabled(isSubmitting)
                     .padding(.top, 10)
+
+                    HStack {
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.2))
+                            .frame(height: 1)
+                        Text("OR")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.2))
+                            .frame(height: 1)
+                    }
+                    .padding(.vertical, 4)
+
+                    Button(action: {
+                        isSubmitting = true
+                        errorMessage = nil
+                        appState.importFromAntigravity { success, msg in
+                            isSubmitting = false
+                            if success {
+                                dismiss()
+                            } else {
+                                errorMessage = msg
+                            }
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                            Text("Import current Antigravity session")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(isSubmitting)
                 }
                 .padding(.vertical, 10)
             } else if selectedTab == 1 {

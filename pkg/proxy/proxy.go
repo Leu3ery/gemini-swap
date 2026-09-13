@@ -17,6 +17,7 @@ import (
 
 	"gemini-swap/pkg/account"
 	"gemini-swap/pkg/auth"
+	"gemini-swap/pkg/session"
 )
 
 type RequestLog struct {
@@ -104,7 +105,7 @@ func (s *Server) Start(ctx context.Context) error {
 			http.Error(w, "missing id query param", http.StatusBadRequest)
 			return
 		}
-		target, err := s.storage.SetActiveAccount(accID)
+		target, err := session.SwitchTo(s.storage, accID, session.Options{})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -180,7 +181,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 			// Find next account
 			nextAcc := s.findNextAccount(store, currentAcc.ID)
 			if nextAcc != nil {
-				_, _ = s.storage.SetActiveAccount(nextAcc.ID)
+				_, _ = session.SwitchTo(s.storage, nextAcc.ID, session.Options{})
 				currentAcc = nextAcc
 				continue
 			}
@@ -222,17 +223,31 @@ func (s *Server) forwardRequest(w http.ResponseWriter, r *http.Request, bodyRead
 	// If OAuth, ensure refreshed
 	if acc.Type == account.TypeOAuth && acc.OAuth != nil {
 		if acc.OAuth.IsExpired() {
-			_ = auth.RefreshToken(acc.OAuth)
+			if err := auth.RefreshToken(acc.OAuth); err == nil {
+				// Persist refreshed token so the next request / CLI sees it.
+				_ = s.storage.AddAccount(acc)
+			}
 		}
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+
+	// Snapshot the body once: handleProxy already consumed r.Body, so without
+	// restoring it POST/PUT requests would reach Google with an empty body.
+	var bodySnapshot []byte
+	if bodyReader != nil {
+		bodySnapshot, _ = io.ReadAll(bodyReader)
+	}
 
 	// Custom Director to inject credentials
 	origDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		origDirector(req)
 		req.Host = targetURL.Host
+		if bodySnapshot != nil {
+			req.Body = io.NopCloser(bytes.NewReader(bodySnapshot))
+			req.ContentLength = int64(len(bodySnapshot))
+		}
 		if acc.Type == account.TypeAPIKey && acc.APIKey != "" {
 			q := req.URL.Query()
 			q.Set("key", acc.APIKey)

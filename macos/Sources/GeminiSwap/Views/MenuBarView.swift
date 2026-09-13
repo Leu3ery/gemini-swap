@@ -93,13 +93,20 @@ struct MenuBarView: View {
                     VStack(spacing: 2) {
                         ForEach(appState.accounts) { acc in
                             let isCurrent = acc.id == appState.activeAccountID
+                            let isSwitchTarget = acc.id == appState.switchingAccountID
                             Button(action: {
                                 appState.switchAccount(to: acc.id)
                             }) {
                                 HStack {
-                                    Image(systemName: isCurrent ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(isCurrent ? .blue : .secondary)
-                                        .font(.system(size: 12))
+                                    if isSwitchTarget {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .frame(width: 12, height: 12)
+                                    } else {
+                                        Image(systemName: isCurrent ? "checkmark.circle.fill" : "circle")
+                                            .foregroundColor(isCurrent ? .blue : .secondary)
+                                            .font(.system(size: 12))
+                                    }
 
                                     Text(acc.name)
                                         .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
@@ -118,6 +125,7 @@ struct MenuBarView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .disabled(appState.isSwitchingAccount)
                             .background(isCurrent ? Color.blue.opacity(0.1) : Color.clear)
                             .cornerRadius(5)
                         }

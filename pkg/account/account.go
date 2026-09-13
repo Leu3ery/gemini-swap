@@ -18,6 +18,11 @@ type OAuthData struct {
 	IDToken      string `json:"id_token,omitempty"`
 	ExpiryDate   int64  `json:"expiry_date,omitempty"` // Unix ms
 	Scope        string `json:"scope,omitempty"`
+	// Client marks which OAuth client minted the refresh token:
+	// "gemini" (Gemini CLI / gemini-swap login) or "antigravity" (IDE session).
+	// Antigravity cannot refresh "gemini"-bound tokens (unauthorized_client),
+	// so switching the IDE to such an account ends the session within ~1h.
+	Client string `json:"client,omitempty"`
 }
 
 func (o *OAuthData) IsExpired() bool {

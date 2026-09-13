@@ -12,6 +12,9 @@ class AppState: ObservableObject {
     @Published var lastRefreshed: Date? = nil
     @Published var errorMessage: String? = nil
     @Published var toastMessage: String? = nil
+    @Published var switchingAccountID: String? = nil
+    @Published var switchingStatusText: String? = nil
+    @Published var switchStartedAt: Date? = nil
 
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
@@ -21,6 +24,15 @@ class AppState: ObservableObject {
 
     var activeAccount: Account? {
         accounts.first(where: { $0.id == activeAccountID }) ?? accounts.first
+    }
+
+    var isSwitchingAccount: Bool {
+        switchingAccountID != nil
+    }
+
+    var switchingAccount: Account? {
+        guard let id = switchingAccountID else { return nil }
+        return accounts.first(where: { $0.id == id })
     }
 
     var baseDir: URL {
@@ -87,21 +99,87 @@ class AppState: ObservableObject {
     }
 
     func switchAccount(to id: String) {
+        guard !isSwitchingAccount else { return }
         guard let target = accounts.first(where: { $0.id == id }) else { return }
 
-        // Update local state
-        activeAccountID = id
-        
-        // Run CLI switch command to update all stores, Antigravity credentials, and ~/.gemini/
-        runCLICommand(["switch", id])
+        // Legacy accounts were authorized with Gemini CLI's OAuth client.
+        // Antigravity cannot refresh those tokens. Upgrade the selected
+        // account interactively before attempting the actual IDE switch.
+        if target.type == .oauth && target.oauth?.client != "antigravity" {
+            guard let email = target.email, !email.isEmpty else {
+                showToast("This account must be authorized for Antigravity first")
+                return
+            }
+            switchingAccountID = id
+            switchingStatusText = "Waiting for Google authorization…"
+            switchStartedAt = Date()
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { return }
+                let output = self.runCLICommand(["login", "--ide", "--email", email])
+                DispatchQueue.main.async {
+                    self.finishSwitch(target: target, output: output)
+                }
+            }
+            return
+        }
 
-        // Ensure CLI and Antigravity tokens are synced
-        syncToGeminiCLI(account: target)
-        syncToAntigravity(account: target)
+        switchingAccountID = id
+        switchingStatusText = "Switching Antigravity…"
+        switchStartedAt = Date()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let output = self.runCLICommand(["switch", id])
+            DispatchQueue.main.async {
+                self.finishSwitch(target: target, output: output)
+            }
+        }
+    }
 
-        // Reload updated accounts data and distinct quotas
-        readAccountsFile()
-        showToast("Switched to \(target.name) (Antigravity & CLI synced)")
+    private func finishSwitch(target: Account, output: String) {
+        // CLI is the single source of truth: it updates accounts.json,
+        // ~/.gemini/* and the Antigravity keychain + reloads the IDE.
+        // (Previous version additionally rewrote those files here from the
+        // possibly stale in-memory cache, which could overwrite fresh tokens.)
+        // Verify persistence synchronously instead of trusting the toast:
+        // if the CLI binary is missing or the switch failed, accounts.json
+        // still holds the old activeAccountID and we must revert + show error.
+        do {
+            let data = try Data(contentsOf: accountsFileURL)
+            let store = try JSONDecoder().decode(StoreData.self, from: data)
+            DispatchQueue.main.async {
+                self.switchingAccountID = nil
+                self.switchingStatusText = nil
+                self.switchStartedAt = nil
+                self.accounts = store.accounts
+                self.activeAccountID = store.activeAccountID
+                self.lastRefreshed = Date()
+                let confirmed = output.contains("Active account switched to:") || output.contains("Successfully added Google account:")
+                if store.activeAccountID == target.id && confirmed {
+                    let warnings = output.components(separatedBy: "\n")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { $0.hasPrefix("Warning:") }
+                    if let first = warnings.first {
+                        let short = String(first.dropFirst("Warning:".count).trimmingCharacters(in: .whitespaces).prefix(140))
+                        self.showToast("Switched to \(target.name), but: \(short)")
+                    } else {
+                        self.showToast("Switched to \(target.name) (Antigravity & CLI synced)")
+                    }
+                } else {
+                    let detail = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.showToast(detail.isEmpty ? "Switch failed: CLI did not update accounts.json" : "Switch failed: \(String(detail.prefix(180)))")
+                }
+            }
+        } catch {
+            // CLI failed and/or file unreadable
+            DispatchQueue.main.async {
+                self.switchingAccountID = nil
+                self.switchingStatusText = nil
+                self.switchStartedAt = nil
+                let detail = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.showToast(detail.isEmpty ? "Switch failed" : "Switch failed: \(detail)")
+            }
+            print("Switch verification failed: \(error), CLI output: \(output)")
+        }
     }
 
     func refreshQuotas() {
@@ -131,10 +209,39 @@ class AppState: ObservableObject {
         }
     }
 
-    func loginOAuth() {
-        runCLICommand(["login"])
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.readAccountsFile()
+    func loginOAuth(ide: Bool = false, completion: ((Bool, String) -> Void)? = nil) {
+        // Run off the main thread: the browser OAuth flow blocks for minutes
+        // while the user signs in; blocking main would freeze the UI.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let output = self.runCLICommand(ide ? ["login", "--ide"] : ["login"])
+            DispatchQueue.main.async {
+                self.readAccountsFile()
+                if output.contains("Successfully added Google account") {
+                    self.showToast("Google account added!")
+                    completion?(true, "")
+                } else {
+                    let msg = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    completion?(false, msg.isEmpty ? "Sign-in failed with no output" : msg)
+                }
+            }
+        }
+    }
+
+    func importFromAntigravity(completion: ((Bool, String) -> Void)? = nil) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let output = self.runCLICommand(["resync"])
+            DispatchQueue.main.async {
+                self.readAccountsFile()
+                if output.contains("Imported live Antigravity session") {
+                    self.showToast("Antigravity session imported!")
+                    completion?(true, "")
+                } else {
+                    let msg = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    completion?(false, msg.isEmpty ? "No Antigravity session found" : msg)
+                }
+            }
         }
     }
 
@@ -223,79 +330,6 @@ class AppState: ObservableObject {
             let result = importAccount(source: url.path)
             completion?(result.success, result.message)
         }
-    }
-
-    private func syncToGeminiCLI(account: Account) {
-        let geminiDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini")
-        try? FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
-
-        if account.type == .oauth, let oauth = account.oauth {
-            let credsPath = geminiDir.appendingPathComponent("oauth_creds.json")
-            let accountsPath = geminiDir.appendingPathComponent("google_accounts.json")
-
-            let credsDict: [String: Any] = [
-                "access_token": oauth.accessToken,
-                "refresh_token": oauth.refreshToken ?? "",
-                "scope": oauth.scope ?? "",
-                "token_type": oauth.tokenType ?? "Bearer",
-                "id_token": oauth.idToken ?? "",
-                "expiry_date": oauth.expiryDate ?? 0
-            ]
-
-            if let credsData = try? JSONSerialization.data(withJSONObject: credsDict, options: .prettyPrinted) {
-                try? credsData.write(to: credsPath)
-            }
-
-            if let email = account.email {
-                let accDict: [String: Any] = [
-                    "active": email,
-                    "old": []
-                ]
-                if let accData = try? JSONSerialization.data(withJSONObject: accDict, options: .prettyPrinted) {
-                    try? accData.write(to: accountsPath)
-                }
-            }
-        }
-    }
-
-    private func syncToAntigravity(account: Account) {
-        guard account.type == .oauth, let oauth = account.oauth else { return }
-
-        let geminiDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini")
-        try? FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
-
-        let expiryDate: Date
-        if let exp = oauth.expiryDate, exp > 0 {
-            expiryDate = Date(timeIntervalSince1970: Double(exp) / 1000.0)
-        } else {
-            expiryDate = Date().addingTimeInterval(3600)
-        }
-        let expiryStr = ISO8601DateFormatter().string(from: expiryDate)
-
-        let standaloneDict: [String: Any] = [
-            "token": [
-                "access_token": oauth.accessToken,
-                "token_type": oauth.tokenType ?? "Bearer",
-                "refresh_token": oauth.refreshToken ?? "",
-                "expiry": expiryStr
-            ],
-            "auth_method": "consumer"
-        ]
-
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: standaloneDict, options: []) else { return }
-
-        // 1. Write ~/.gemini/jetski-standalone-oauth-token
-        let tokenURL = geminiDir.appendingPathComponent("jetski-standalone-oauth-token")
-        try? jsonData.write(to: tokenURL)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
-
-        // 2. Update macOS Keychain
-        let b64 = jsonData.base64EncodedString()
-        let keychainVal = "go-keyring-base64:" + b64
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["add-generic-password", "-U", "-s", "gemini", "-a", "antigravity", "-w", keychainVal]
-        try? process.run()
     }
 
     @discardableResult

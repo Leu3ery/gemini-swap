@@ -90,6 +90,21 @@ struct MainWindowView: View {
                             .font(.system(size: 14, weight: .bold))
                             .foregroundColor(.secondary)
 
+                        if let switching = appState.switchingAccount,
+                           let status = appState.switchingStatusText {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                TimelineView(.periodic(from: appState.switchStartedAt ?? .now, by: 1)) { context in
+                                    let elapsed = max(0, Int(context.date.timeIntervalSince(appState.switchStartedAt ?? context.date)))
+                                    Text("\(status) \(switching.name) · \(elapsed)s")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .accessibilityElement(children: .combine)
+                        }
+
                         if appState.accounts.isEmpty {
                             VStack(spacing: 12) {
                                 Image(systemName: "person.crop.circle.badge.plus")
@@ -116,6 +131,9 @@ struct MainWindowView: View {
                                 AccountCardView(
                                     account: acc,
                                     isActive: acc.id == appState.activeAccountID,
+                                    switchingText: appState.switchingAccountID == acc.id ? appState.switchingStatusText : nil,
+                                    switchStartedAt: appState.switchingAccountID == acc.id ? appState.switchStartedAt : nil,
+                                    switchingDisabled: appState.isSwitchingAccount,
                                     onSwitch: {
                                         appState.switchAccount(to: acc.id)
                                     },

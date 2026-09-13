@@ -127,58 +127,6 @@ func fetchAntigravityQuota() (*account.QuotaInfo, error) {
 	return quotaInfo, nil
 }
 
-func buildDefaultAntigravityQuota() *account.QuotaInfo {
-	return &account.QuotaInfo{
-		UpdatedAt:   time.Now(),
-		Tier:        "Google AI Pro",
-		Description: "Within each group, models share a weekly limit and a 5-hour limit.",
-		Groups: []account.QuotaGroup{
-			{
-				DisplayName: "Gemini Models",
-				Description: "Models within this group: Gemini Flash, Gemini Pro",
-				Buckets: []account.QuotaBucket{
-					{
-						BucketID:          "gemini-weekly",
-						DisplayName:       "Weekly Limit Remaining",
-						Description:       "You have used some of your weekly limit, it will fully refresh in a few days.",
-						Window:            "weekly",
-						RemainingFraction: 1.0,
-						ResetTime:         time.Now().Add(5 * 24 * time.Hour).Format(time.RFC3339),
-					},
-					{
-						BucketID:          "gemini-5h",
-						DisplayName:       "Five Hour Limit Remaining",
-						Description:       "You have used some of your 5-hour limit, it will fully refresh in 5 hours.",
-						Window:            "5h",
-						RemainingFraction: 1.0,
-						ResetTime:         time.Now().Add(5 * time.Hour).Format(time.RFC3339),
-					},
-				},
-			},
-			{
-				DisplayName: "Claude and GPT models",
-				Description: "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
-				Buckets: []account.QuotaBucket{
-					{
-						BucketID:          "3p-weekly",
-						DisplayName:       "Weekly Limit Remaining",
-						Window:            "weekly",
-						RemainingFraction: 1.0,
-						ResetTime:         time.Now().Add(7 * 24 * time.Hour).Format(time.RFC3339),
-					},
-					{
-						BucketID:          "3p-5h",
-						DisplayName:       "Five Hour Limit Remaining",
-						Window:            "5h",
-						RemainingFraction: 1.0,
-						ResetTime:         time.Now().Add(5 * time.Hour).Format(time.RFC3339),
-					},
-				},
-			},
-		},
-	}
-}
-
 func FetchAccountQuota(acc *account.Account, isActive bool) (*account.QuotaInfo, error) {
 	if acc.Type == account.TypeAPIKey {
 		return FetchAPIKeyQuota(acc)
@@ -193,7 +141,10 @@ func FetchAccountQuota(acc *account.Account, isActive bool) (*account.QuotaInfo,
 		_ = auth.RefreshToken(acc.OAuth)
 	}
 
-	// 1. If this is the active account in Antigravity, fetch live limits from local language server
+	// 1. Live limits come from the local Antigravity language server, which
+	// always reflects the IDE's CURRENT session — so they may only be
+	// attributed to the matching account. Attributing them to any other
+	// account is how two cards ended up showing identical numbers.
 	if isActive {
 		if q, err := fetchAntigravityQuota(); err == nil && len(q.Groups) > 0 {
 			acc.LastQuota = q
@@ -201,13 +152,34 @@ func FetchAccountQuota(acc *account.Account, isActive bool) (*account.QuotaInfo,
 		}
 	}
 
-	// 2. If account already has recorded quota from when it was active, keep its own quota
-	if acc.LastQuota != nil && len(acc.LastQuota.Groups) > 0 {
+	// 2. Otherwise keep this account's own last-known quota (frozen in time).
+	if acc.LastQuota != nil && (len(acc.LastQuota.Groups) > 0 || len(acc.LastQuota.Buckets) > 0) {
 		return acc.LastQuota, nil
 	}
 
-	// 3. Fallback to default fresh Antigravity quota (100% available)
-	q := buildDefaultAntigravityQuota()
-	acc.LastQuota = q
-	return q, nil
+	return nil, fmt.Errorf("no quota data for %s — switch to it and refresh", acc.Name)
+}
+
+// SessionAccountID matches the live IDE session (keychain token) against the
+// store without any network calls, by comparing refresh/access tokens.
+func SessionAccountID(store *account.StoreData) string {
+	if store == nil {
+		return ""
+	}
+	sess, err := account.ReadAntigravitySessionToken()
+	if err != nil || sess == nil {
+		return ""
+	}
+	for _, a := range store.Accounts {
+		if a.Type != account.TypeOAuth || a.OAuth == nil {
+			continue
+		}
+		if sess.RefreshToken != "" && a.OAuth.RefreshToken == sess.RefreshToken {
+			return a.ID
+		}
+		if sess.AccessToken != "" && a.OAuth.AccessToken == sess.AccessToken {
+			return a.ID
+		}
+	}
+	return ""
 }

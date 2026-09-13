@@ -66,8 +66,8 @@ gemini-swap list
 ### 2. Add Accounts
 
 ```bash
-# Add a Google account via browser OAuth:
-gemini-swap login
+# Add an account that can be switched inside Antigravity:
+gemini-swap login --ide
 
 # Add a Google account on a remote headless VPS:
 gemini-swap login --headless
@@ -82,7 +82,7 @@ gemini-swap add-key --name "Personal Studio Key" --key "AIzaSy..."
 # Switch by email or name:
 gemini-swap switch user@gmail.com
 ```
-*Swapping automatically synchronizes `~/.gemini/oauth_creds.json` and `~/.gemini/google_accounts.json` so Gemini CLI, Antigravity, and other tools switch instantly.*
+*Swapping synchronizes `~/.gemini/oauth_creds.json`, the Antigravity token file, and the macOS Keychain, then reloads the IDE. Accounts imported from old Gemini CLI credentials require a one-time **Authorize & Switch** flow in the macOS app (or `gemini-swap login --ide --email user@gmail.com`) before they can become active.*
 
 ### 4. Check Quotas & Usage
 

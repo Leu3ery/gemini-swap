@@ -57,11 +57,11 @@ func (s *Storage) Load() (*StoreData, error) {
 	data, err := os.ReadFile(filePath)
 	if os.IsNotExist(err) {
 		initial := &StoreData{
-			Version:         CurrentVersion,
-			Accounts:        make([]*Account, 0),
-			ProxyPort:       DefaultPort,
-			AutoRotate:      true,
-			LastUpdated:     time.Now(),
+			Version:     CurrentVersion,
+			Accounts:    make([]*Account, 0),
+			ProxyPort:   DefaultPort,
+			AutoRotate:  true,
+			LastUpdated: time.Now(),
 		}
 		return initial, nil
 	}
@@ -117,6 +117,25 @@ func (s *Storage) GetActiveAccount() (*Account, error) {
 }
 
 func (s *Storage) SetActiveAccount(idOrEmail string) (*Account, error) {
+	target, err := s.CommitActiveAccount(idOrEmail)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := SyncToGeminiCLI(target); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to sync with ~/.gemini: %v\n", err)
+	}
+	if err := SyncToAntigravity(target); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to sync with Antigravity: %v\n", err)
+	}
+
+	return target, nil
+}
+
+// CommitActiveAccount updates only Gemini Swap's active-account metadata.
+// Session switching uses this after Antigravity has confirmed the target
+// identity, so UI file watchers cannot report success prematurely.
+func (s *Storage) CommitActiveAccount(idOrEmail string) (*Account, error) {
 	store, err := s.Load()
 	if err != nil {
 		return nil, err
@@ -137,18 +156,6 @@ func (s *Storage) SetActiveAccount(idOrEmail string) (*Account, error) {
 	store.ActiveAccountID = target.ID
 	if err := s.Save(store); err != nil {
 		return nil, err
-	}
-
-	// Synchronize to ~/.gemini/
-	if err := SyncToGeminiCLI(target); err != nil {
-		// Non-fatal warning
-		fmt.Fprintf(os.Stderr, "Warning: failed to sync with ~/.gemini: %v\n", err)
-	}
-
-	// Synchronize to Antigravity
-	if err := SyncToAntigravity(target); err != nil {
-		// Non-fatal warning
-		fmt.Fprintf(os.Stderr, "Warning: failed to sync with Antigravity: %v\n", err)
 	}
 
 	return target, nil
@@ -202,10 +209,12 @@ func (s *Storage) RemoveAccount(idOrEmail string) error {
 	}
 
 	newAccounts := make([]*Account, 0, len(store.Accounts))
+	var removedID string
 	var removed bool
 	for _, acc := range store.Accounts {
 		if acc.ID == idOrEmail || acc.Email == idOrEmail || acc.Name == idOrEmail {
 			removed = true
+			removedID = acc.ID
 			continue
 		}
 		newAccounts = append(newAccounts, acc)
@@ -216,12 +225,27 @@ func (s *Storage) RemoveAccount(idOrEmail string) error {
 	}
 
 	store.Accounts = newAccounts
-	if store.ActiveAccountID == idOrEmail || len(store.Accounts) > 0 && (store.ActiveAccountID == "") {
+	// If the removed account was active (matched by ID, email or name),
+	// or active points to a now-missing account, fall back to the first remaining.
+	activeStillExists := false
+	for _, acc := range store.Accounts {
+		if acc.ID == store.ActiveAccountID {
+			activeStillExists = true
+			break
+		}
+	}
+	if !activeStillExists {
 		if len(store.Accounts) > 0 {
 			store.ActiveAccountID = store.Accounts[0].ID
 			_ = SyncToGeminiCLI(store.Accounts[0])
+			_ = SyncToAntigravity(store.Accounts[0])
 		} else {
 			store.ActiveAccountID = ""
+		}
+	} else if store.ActiveAccountID == removedID {
+		if len(store.Accounts) > 0 {
+			store.ActiveAccountID = store.Accounts[0].ID
+			_ = SyncToGeminiCLI(store.Accounts[0])
 		}
 	}
 
@@ -230,9 +254,9 @@ func (s *Storage) RemoveAccount(idOrEmail string) error {
 
 // ExportPayload represents the portable export format
 type ExportPayload struct {
-	GeminiSwapExport int        `json:"gemini_swap_export"`
-	ExportedAt       time.Time  `json:"exported_at"`
-	Account          *Account   `json:"account"`
+	GeminiSwapExport int       `json:"gemini_swap_export"`
+	ExportedAt       time.Time `json:"exported_at"`
+	Account          *Account  `json:"account"`
 }
 
 func (s *Storage) ExportAccount(idOrEmail string, outPath string) (string, string, error) {

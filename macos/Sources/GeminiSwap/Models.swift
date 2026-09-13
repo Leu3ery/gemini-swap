@@ -12,6 +12,7 @@ struct OAuthData: Codable {
     var idToken: String?
     var expiryDate: Int64?
     var scope: String?
+    var client: String?
 
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
@@ -20,6 +21,7 @@ struct OAuthData: Codable {
         case idToken = "id_token"
         case expiryDate = "expiry_date"
         case scope = "scope"
+        case client = "client"
     }
 }
 

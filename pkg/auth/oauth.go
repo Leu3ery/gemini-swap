@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"os"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -69,8 +69,44 @@ var Scopes = []string{
 	"https://www.googleapis.com/auth/cloud-platform",
 	"https://www.googleapis.com/auth/userinfo.email",
 	"https://www.googleapis.com/auth/userinfo.profile",
+}
+
+// IDEScopes mirrors the scopes of a live Antigravity IDE session (seen in
+// GetAuthStatus grantedScopes). cclog/aicode are registered on the IDE's own
+// OAuth client — requesting them with the Gemini client yields 403.
+var IDEScopes = []string{
+	"openid",
+	"email",
+	"profile",
+	"https://www.googleapis.com/auth/cloud-platform",
+	"https://www.googleapis.com/auth/userinfo.email",
+	"https://www.googleapis.com/auth/userinfo.profile",
 	"https://www.googleapis.com/auth/cclog",
+	"https://www.googleapis.com/auth/aicode",
 	"https://www.googleapis.com/auth/experimentsandconfigs",
+}
+
+// ClientConfig selects which Google OAuth client a login flow uses.
+// Tokens are bound to the client that minted them: only the IDE's own client
+// produces refresh tokens the Antigravity language_server accepts.
+type ClientConfig struct {
+	ID     string
+	Secret string
+	Scopes []string
+	// Tag is stored on Account.OAuth.Client ("gemini" or "antigravity").
+	Tag string
+}
+
+// GeminiClient is the Gemini CLI OAuth client (durable for CLI/proxy/env,
+// NOT refreshable by the Antigravity IDE).
+func GeminiClient() ClientConfig {
+	return ClientConfig{ID: getClientID(), Secret: getClientSecret(), Scopes: Scopes, Tag: "gemini"}
+}
+
+// AntigravityClient is the IDE's own OAuth client (durable everywhere,
+// including inside the Antigravity IDE).
+func AntigravityClient() ClientConfig {
+	return ClientConfig{ID: getAntigravityClientID(), Secret: getAntigravityClientSecret(), Scopes: IDEScopes, Tag: "antigravity"}
 }
 
 type UserInfo struct {
@@ -118,6 +154,17 @@ func openBrowser(targetUrl string) error {
 }
 
 func LoginWithBrowser(ctx context.Context) (*account.Account, error) {
+	return LoginWithBrowserAs(ctx, GeminiClient())
+}
+
+func LoginWithBrowserAs(ctx context.Context, cfg ClientConfig) (*account.Account, error) {
+	return LoginWithBrowserAsHint(ctx, cfg, "")
+}
+
+// LoginWithBrowserAsHint starts OAuth for a specific saved account. Google may
+// still show an account chooser, but login_hint makes the intended identity the
+// default and reduces accidental authorization of the currently open account.
+func LoginWithBrowserAsHint(ctx context.Context, cfg ClientConfig, loginHint string) (*account.Account, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open local port for oauth callback: %w", err)
@@ -130,14 +177,21 @@ func LoginWithBrowser(ctx context.Context) (*account.Account, error) {
 	verifier, challenge := generatePKCE()
 	state := generateRandomString(16)
 
-	authURL := fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&scope=%s&access_type=offline&prompt=consent&code_challenge=%s&code_challenge_method=S256&state=%s",
-		AuthEndpoint,
-		url.QueryEscape(getClientID()),
-		url.QueryEscape(redirectURI),
-		url.QueryEscape(strings.Join(Scopes, " ")),
-		url.QueryEscape(challenge),
-		url.QueryEscape(state),
-	)
+	params := url.Values{
+		"response_type":         {"code"},
+		"client_id":             {cfg.ID},
+		"redirect_uri":          {redirectURI},
+		"scope":                 {strings.Join(cfg.Scopes, " ")},
+		"access_type":           {"offline"},
+		"prompt":                {"consent select_account"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"state":                 {state},
+	}
+	if loginHint != "" {
+		params.Set("login_hint", loginHint)
+	}
+	authURL := AuthEndpoint + "?" + params.Encode()
 
 	codeChan := make(chan string, 1)
 	errChan := make(chan error, 1)
@@ -199,20 +253,33 @@ func LoginWithBrowser(ctx context.Context) (*account.Account, error) {
 		_ = server.Shutdown(context.Background())
 	}
 
-	return ExchangeCodeForAccount(authCode, redirectURI, verifier)
+	return ExchangeCodeForAccountAs(authCode, redirectURI, verifier, cfg)
 }
 
 func LoginHeadless(ctx context.Context) (*account.Account, error) {
-	// Headless flow for VPS
+	return LoginHeadlessAs(ctx, GeminiClient())
+}
+
+func LoginHeadlessAs(ctx context.Context, cfg ClientConfig) (*account.Account, error) {
+	// Headless flow for VPS.
+	// The Gemini client accepts the hosted codeassist.google.com/authcode
+	// redirect; any other client only accepts loopback redirects, so we use a
+	// fixed localhost port and ask for the full redirect URL (works over SSH
+	// without a tunnel: the code is in the address bar).
 	redirectURI := "https://codeassist.google.com/authcode"
+	headlessHint := "Paste the authorization code (or full redirect URL) here: "
+	if cfg.Tag != "gemini" {
+		redirectURI = "http://localhost:8493"
+		headlessHint = "Paste the FULL redirect URL from your browser address bar here (http://localhost:8493/?code=...): "
+	}
 	verifier, challenge := generatePKCE()
 	state := generateRandomString(16)
 
 	authURL := fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&scope=%s&access_type=offline&prompt=consent&code_challenge=%s&code_challenge_method=S256&state=%s",
 		AuthEndpoint,
-		url.QueryEscape(getClientID()),
+		url.QueryEscape(cfg.ID),
 		url.QueryEscape(redirectURI),
-		url.QueryEscape(strings.Join(Scopes, " ")),
+		url.QueryEscape(strings.Join(cfg.Scopes, " ")),
 		url.QueryEscape(challenge),
 		url.QueryEscape(state),
 	)
@@ -221,7 +288,7 @@ func LoginHeadless(ctx context.Context) (*account.Account, error) {
 	fmt.Println("1. Open the following link in any browser:")
 	fmt.Printf("\n%s\n\n", authURL)
 	fmt.Println("2. Sign in with your Google account and grant permissions.")
-	fmt.Print("3. Paste the authorization code (or full redirect URL) here: ")
+	fmt.Print("3. " + headlessHint)
 
 	var rawInput string
 	_, err := fmt.Scanln(&rawInput)
@@ -237,14 +304,18 @@ func LoginHeadless(ctx context.Context) (*account.Account, error) {
 		}
 	}
 
-	return ExchangeCodeForAccount(authCode, redirectURI, verifier)
+	return ExchangeCodeForAccountAs(authCode, redirectURI, verifier, cfg)
 }
 
 func ExchangeCodeForAccount(code, redirectURI, codeVerifier string) (*account.Account, error) {
+	return ExchangeCodeForAccountAs(code, redirectURI, codeVerifier, GeminiClient())
+}
+
+func ExchangeCodeForAccountAs(code, redirectURI, codeVerifier string, cfg ClientConfig) (*account.Account, error) {
 	values := url.Values{
 		"code":          {code},
-		"client_id":     {getClientID()},
-		"client_secret": {getClientSecret()},
+		"client_id":     {cfg.ID},
+		"client_secret": {cfg.Secret},
 		"redirect_uri":  {redirectURI},
 		"grant_type":    {"authorization_code"},
 	}
@@ -290,6 +361,7 @@ func ExchangeCodeForAccount(code, redirectURI, codeVerifier string) (*account.Ac
 			IDToken:      tokenResp.IDToken,
 			ExpiryDate:   expiryDate,
 			Scope:        tokenResp.Scope,
+			Client:       cfg.Tag,
 		},
 	}
 	if acc.Name == "" {
@@ -304,12 +376,16 @@ func RefreshToken(oauth *account.OAuthData) error {
 		return errors.New("no refresh token available")
 	}
 
+	// Try the minting client first (known from provenance), then the other one.
 	clientPairs := []struct {
 		clientID     string
 		clientSecret string
 	}{
 		{getClientID(), getClientSecret()},
 		{getAntigravityClientID(), getAntigravityClientSecret()},
+	}
+	if oauth.Client == "antigravity" {
+		clientPairs[0], clientPairs[1] = clientPairs[1], clientPairs[0]
 	}
 
 	var lastErr error
