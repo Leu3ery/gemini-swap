@@ -39,7 +39,8 @@ def handle(client):
                     if not data: return
                     other = dest if s is client else client
                     other.sendall(data)
-    except Exception:
+    except Exception as e:
+        # print error for debugging
         pass
     finally:
         client.close()
@@ -79,8 +80,13 @@ subprocess.run(['git', 'tag', '-fa', 'v1.1.4', '-m', 'Release v1.1.4'], check=Tr
 
 print('[GitHub] Pushing tag v1.1.4...')
 sys.stdout.flush()
-res = subprocess.run(['git', '-c', f'http.proxy={proxy_url}', 'push', '-f', 'origin', 'v1.1.4'], env=env, capture_output=True, text=True)
-print('Push tag result:\n', res.stdout, res.stderr)
+for attempt in range(5):
+    res = subprocess.run(['git', '-c', f'http.proxy={proxy_url}', 'push', '-f', 'origin', 'v1.1.4'], env=env, capture_output=True, text=True)
+    if res.returncode == 0:
+        print('Push tag result:\n', res.stdout, res.stderr)
+        break
+    print(f'Attempt {attempt+1} failed: {res.stderr}. Retrying...')
+    time.sleep(2)
 sys.stdout.flush()
 
 print('[GitHub] Creating Release v1.1.4 and uploading compiled assets...')

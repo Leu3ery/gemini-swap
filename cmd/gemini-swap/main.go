@@ -193,11 +193,7 @@ func handleSwitch(storage *account.Storage, args []string) {
 	fmt.Println("  Synchronized ~/.gemini/oauth_creds.json and ~/.gemini/google_accounts.json")
 	if acc.Type == account.TypeOAuth {
 		fmt.Println("  Synchronized Google Antigravity session & credentials")
-		// Refresh quota for the newly active account
-		if q, qErr := quota.FetchAccountQuota(acc, true); qErr == nil && q != nil {
-			acc.LastQuota = q
-			_ = storage.AddAccount(acc)
-		}
+		fmt.Println("  (To apply to an already open Antigravity IDE: reload window or restart Antigravity)")
 	}
 }
 
