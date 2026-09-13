@@ -5,6 +5,8 @@ struct AccountCardView: View {
     let isActive: Bool
     let onSwitch: () -> Void
     let onRemove: () -> Void
+    let onExportFile: () -> Void
+    let onCopyShareCode: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -61,6 +63,23 @@ struct AccountCardView: View {
 
                 // Actions
                 HStack(spacing: 10) {
+                    // Export Menu
+                    Menu {
+                        Button(action: onExportFile) {
+                            Label("Save Config File (.json)...", systemImage: "arrow.down.doc")
+                        }
+                        Button(action: onCopyShareCode) {
+                            Label("Copy Share Code", systemImage: "doc.on.doc")
+                        }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 13))
+                            .foregroundColor(.blue)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 24, height: 24)
+                    .help("Export account config for friend")
+
                     if !isActive {
                         Button(action: onSwitch) {
                             HStack(spacing: 4) {

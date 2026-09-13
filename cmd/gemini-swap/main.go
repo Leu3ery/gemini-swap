@@ -51,6 +51,10 @@ func main() {
 		handleAddKey(storage, args)
 	case "remove", "rm", "delete":
 		handleRemove(storage, args)
+	case "export", "share":
+		handleExport(storage, args)
+	case "import", "load":
+		handleImport(storage, args)
 	case "exec", "run":
 		handleExec(storage, args)
 	case "proxy":
@@ -87,6 +91,8 @@ CORE COMMANDS:
   login [--headless]   Log in to a new Google account via OAuth
   add-key              Add a Gemini AI Studio API key
   remove <id|email>    Remove an account
+  export <id|email>    Export account config to a shareable file or code
+  import <file|code>   Import account config from a friend
 
 INTEGRATION & TOOLS:
   exec -- <cmd...>     Run a command with active Gemini credentials injected
@@ -425,6 +431,64 @@ func handleRemove(storage *account.Storage, args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✓ Removed account '%s'\n", id)
+}
+
+func handleExport(storage *account.Storage, args []string) {
+	target := ""
+	outPath := ""
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "--file" || args[i] == "-o") && i+1 < len(args) {
+			outPath = args[i+1]
+			i++
+		} else if !strings.HasPrefix(args[i], "-") && target == "" {
+			target = args[i]
+		}
+	}
+
+	if target == "" {
+		acc, err := storage.GetActiveAccount()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Usage: gemini-swap export [id|email] [--file <path>]")
+			os.Exit(1)
+		}
+		target = acc.ID
+	}
+
+	code, path, err := storage.ExportAccount(target, outPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Export failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("\n✓ Account exported successfully!")
+	fmt.Printf("📁 Saved config file to: %s\n", path)
+	fmt.Printf("📋 Share code (for sending to friend):\n\n%s\n\n", code)
+	fmt.Println("Your friend can load it by running:")
+	fmt.Printf("  gemini-swap import %s\n", path)
+	fmt.Println("  OR")
+	fmt.Println("  gemini-swap import <share-code>\n")
+}
+
+func handleImport(storage *account.Storage, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: gemini-swap import <file-path | share-code>")
+		os.Exit(1)
+	}
+
+	source := args[0]
+	acc, err := storage.ImportAccount(source)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Import failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Try fetching quota
+	_, _ = quota.FetchAccountQuota(acc)
+	_ = storage.AddAccount(acc)
+
+	fmt.Printf("\n✓ Account '%s' (%s) imported successfully!\n", acc.Name, acc.Email)
+	fmt.Println("To make it active, run:")
+	fmt.Printf("  gemini-swap switch %s\n\n", acc.ID)
 }
 
 func handleExec(storage *account.Storage, args []string) {

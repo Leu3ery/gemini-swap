@@ -5,6 +5,7 @@ struct MainWindowView: View {
     var onToggleUpperBar: () -> Void
 
     @State private var showAddAccountSheet = false
+    @State private var addAccountInitialTab = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,8 +63,22 @@ struct MainWindowView: View {
                     .buttonStyle(.bordered)
                     .disabled(appState.isRefreshing)
 
+                    // Import Button
+                    Button(action: {
+                        addAccountInitialTab = 2
+                        showAddAccountSheet = true
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Import...")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Import account config from a friend")
+
                     // Add Account Button
                     Button(action: {
+                        addAccountInitialTab = 0
                         showAddAccountSheet = true
                     }) {
                         HStack(spacing: 4) {
@@ -84,6 +99,19 @@ struct MainWindowView: View {
             // Main Content Area
             ScrollView {
                 VStack(spacing: 18) {
+                    if let toast = appState.toastMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text(toast)
+                                .font(.system(size: 13, weight: .medium))
+                            Spacer()
+                        }
+                        .padding(12)
+                        .background(Color.green.opacity(0.15))
+                        .cornerRadius(8)
+                    }
+
                     // Accounts Section
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Configured Accounts")
@@ -103,6 +131,7 @@ struct MainWindowView: View {
                                     .multilineTextAlignment(.center)
                                     .frame(maxWidth: 400)
                                 Button("Add Your First Account") {
+                                    addAccountInitialTab = 0
                                     showAddAccountSheet = true
                                 }
                                 .buttonStyle(.borderedProminent)
@@ -120,6 +149,12 @@ struct MainWindowView: View {
                                     },
                                     onRemove: {
                                         appState.removeAccount(id: acc.id)
+                                    },
+                                    onExportFile: {
+                                        appState.exportToFile(for: acc)
+                                    },
+                                    onCopyShareCode: {
+                                        appState.copyShareCode(for: acc.id)
                                     }
                                 )
                             }
@@ -164,7 +199,7 @@ struct MainWindowView: View {
         }
         .frame(minWidth: 680, minHeight: 520)
         .sheet(isPresented: $showAddAccountSheet) {
-            AddAccountSheet(appState: appState)
+            AddAccountSheet(appState: appState, initialTab: addAccountInitialTab)
         }
     }
 }

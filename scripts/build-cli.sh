@@ -5,7 +5,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 DIST="$DIR/dist"
 mkdir -p "$DIST"
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 echo "==> Building cross-platform CLI binaries..."
 

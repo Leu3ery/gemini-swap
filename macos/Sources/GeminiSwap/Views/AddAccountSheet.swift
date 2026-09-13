@@ -4,18 +4,25 @@ struct AddAccountSheet: View {
     @Environment(\.dismiss) var dismiss
     @ObservedObject var appState: AppState
 
-    @State private var selectedTab: Int = 0
+    @State private var selectedTab: Int
     @State private var keyName: String = ""
     @State private var apiKey: String = ""
     @State private var rpmLimit: String = "15"
     @State private var rpdLimit: String = "1500"
+    @State private var shareCode: String = ""
+    @State private var errorMessage: String? = nil
     @State private var isSubmitting: Bool = false
+
+    init(appState: AppState, initialTab: Int = 0) {
+        self.appState = appState
+        self._selectedTab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         VStack(spacing: 20) {
             // Header
             HStack {
-                Text("Add Gemini Account")
+                Text(selectedTab == 2 ? "Import Account" : "Add Gemini Account")
                     .font(.headline)
                 Spacer()
                 Button(action: { dismiss() }) {
@@ -28,6 +35,7 @@ struct AddAccountSheet: View {
             Picker("", selection: $selectedTab) {
                 Text("Google OAuth").tag(0)
                 Text("API Key").tag(1)
+                Text("Import from Friend").tag(2)
             }
             .pickerStyle(.segmented)
 
@@ -67,7 +75,7 @@ struct AddAccountSheet: View {
                     .padding(.top, 10)
                 }
                 .padding(.vertical, 10)
-            } else {
+            } else if selectedTab == 1 {
                 // API Key Flow
                 VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -116,6 +124,80 @@ struct AddAccountSheet: View {
                     .disabled(apiKey.isEmpty)
                     .padding(.top, 8)
                 }
+            } else {
+                // Import Flow (from File or Share Code)
+                VStack(spacing: 14) {
+                    Text("Load an account configuration shared by a friend.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    Button(action: {
+                        appState.importFromFile { success, msg in
+                            if success {
+                                dismiss()
+                            } else {
+                                errorMessage = msg
+                            }
+                        }
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.badge.plus")
+                            Text("Choose Config File (.json)...")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+
+                    HStack {
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.2))
+                            .frame(height: 1)
+                        Text("OR PASTE SHARE CODE")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.2))
+                            .frame(height: 1)
+                    }
+                    .padding(.vertical, 4)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Share Code (starts with gswap_)")
+                            .font(.system(size: 11, weight: .medium))
+
+                        TextField("Paste code here...", text: $shareCode)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+
+                    if let err = errorMessage {
+                        Text(err)
+                            .font(.system(size: 11))
+                            .foregroundColor(.red)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    Button(action: {
+                        let (success, msg) = appState.importAccount(source: shareCode)
+                        if success {
+                            dismiss()
+                        } else {
+                            errorMessage = msg
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: "arrow.down.circle")
+                            Text("Import Account")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                    .disabled(shareCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.top, 4)
             }
         }
         .padding(24)

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import AppKit
+import UniformTypeIdentifiers
 
 class AppState: ObservableObject {
     @Published var accounts: [Account] = []
@@ -10,6 +11,7 @@ class AppState: ObservableObject {
     @Published var isMenuBarOnly: Bool = false
     @Published var lastRefreshed: Date? = nil
     @Published var errorMessage: String? = nil
+    @Published var toastMessage: String? = nil
 
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
@@ -142,6 +144,93 @@ class AppState: ObservableObject {
         runCLICommand(["login"])
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             self?.readAccountsFile()
+        }
+    }
+
+    func showToast(_ message: String) {
+        DispatchQueue.main.async {
+            self.toastMessage = message
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            if self?.toastMessage == message {
+                self?.toastMessage = nil
+            }
+        }
+    }
+
+    func exportAccount(id: String, destinationURL: URL? = nil) -> (shareCode: String?, filePath: String?) {
+        var args = ["export", id]
+        if let dest = destinationURL {
+            args += ["--file", dest.path]
+        }
+        let output = runCLICommand(args)
+        var code: String? = nil
+        var path: String? = nil
+        for line in output.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("gswap_") {
+                code = trimmed
+            } else if trimmed.hasPrefix("📁 Saved config file to:") {
+                path = trimmed.replacingOccurrences(of: "📁 Saved config file to:", with: "").trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return (code, path)
+    }
+
+    func copyShareCode(for accountId: String) {
+        let (code, _) = exportAccount(id: accountId)
+        if let code = code {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+            showToast("Share code copied to clipboard!")
+        } else {
+            showToast("Failed to generate share code")
+        }
+    }
+
+    func exportToFile(for account: Account) {
+        let panel = NSSavePanel()
+        panel.title = "Export Gemini Account Config"
+        let safeName = account.name
+            .replacingOccurrences(of: "@", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: ".", with: "_")
+        panel.nameFieldStringValue = "gemini-\(safeName).json"
+        panel.allowedContentTypes = [.json]
+        if panel.runModal() == .OK, let url = panel.url {
+            let (_, path) = exportAccount(id: account.id, destinationURL: url)
+            if path != nil {
+                showToast("Exported to \(url.lastPathComponent)")
+            } else {
+                showToast("Failed to save config file")
+            }
+        }
+    }
+
+    func importAccount(source: String) -> (success: Bool, message: String) {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return (false, "Input cannot be empty")
+        }
+        let output = runCLICommand(["import", trimmed])
+        if output.contains("imported successfully") {
+            readAccountsFile()
+            showToast("Account imported successfully!")
+            return (true, "Account imported successfully!")
+        } else {
+            let err = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (false, err.isEmpty ? "Failed to import account. Please verify file format or share code." : err)
+        }
+    }
+
+    func importFromFile(completion: ((Bool, String) -> Void)? = nil) {
+        let panel = NSOpenPanel()
+        panel.title = "Import Gemini Account Config"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            let result = importAccount(source: url.path)
+            completion?(result.success, result.message)
         }
     }
 

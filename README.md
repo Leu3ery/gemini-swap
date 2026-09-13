@@ -102,6 +102,30 @@ Fetching latest usage & quotas from Google...
     Reset Time: 2026-09-14T19:00:00Z
 ```
 
+### 5. Share Accounts (Export & Import with Friends)
+
+You can easily export any account and share it with a friend:
+
+#### In macOS App:
+- Click the **Share icon** (`↑`) on any account card:
+  - **"Save Config File (.json)..."** to export as a portable `.json` file.
+  - **"Copy Share Code"** to copy a compact `gswap_...` code directly to your clipboard.
+- To import: Click **"Import..."** in the top bar (or "Import from Friend" in the Add Account sheet) and either select the `.json` file or paste the `gswap_...` share code!
+
+#### In CLI:
+```bash
+# Export account to a JSON config file:
+gemini-swap export user@gmail.com --file friend-account.json
+
+# Or export to generate a compact share code:
+gemini-swap export user@gmail.com
+
+# Your friend imports it with 1 command:
+gemini-swap import friend-account.json
+# OR using the share code:
+gemini-swap import gswap_eyJ...
+```
+
 ---
 
 ## 🤖 Codex & AI Agent Integration
