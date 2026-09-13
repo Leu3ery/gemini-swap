@@ -11,72 +11,45 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             // macOS Top Toolbar Header
             HStack(alignment: .center) {
-                HStack(spacing: 12) {
-                    ZStack {
-                        LinearGradient(
-                            colors: [Color.blue, Color.purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .frame(width: 36, height: 36)
-                        .cornerRadius(10)
-
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                    }
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Gemini Swap")
-                            .font(.system(size: 17, weight: .bold))
-                        Text("\(appState.accounts.count) account\(appState.accounts.count == 1 ? "" : "s") configured")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-                }
+                Text("Gemini Swap")
+                    .font(.system(size: 15, weight: .semibold))
 
                 Spacer()
 
                 // Actions
-                HStack(spacing: 10) {
-                    // Hide to Menu Bar Mode Button ("Upper Part Mode")
+                HStack(spacing: 8) {
                     Button(action: onToggleUpperBar) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 4) {
                             Image(systemName: "menubar.arrow.up.rectangle")
-                            Text("Upper Bar Mode")
+                            Text("Menu Bar")
                         }
                     }
                     .buttonStyle(.bordered)
-                    .help("Hide app into the top macOS Menu Bar")
+                    .help("Hide app into the macOS Menu Bar")
 
-                    // Refresh Button
                     Button(action: {
                         appState.refreshQuotas()
                     }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.clockwise")
-                                .rotationEffect(.degrees(appState.isRefreshing ? 360 : 0))
-                                .animation(appState.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: appState.isRefreshing)
-                            Text("Refresh Quotas")
-                        }
+                        Image(systemName: "arrow.clockwise")
+                            .rotationEffect(.degrees(appState.isRefreshing ? 360 : 0))
+                            .animation(appState.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: appState.isRefreshing)
                     }
                     .buttonStyle(.bordered)
                     .disabled(appState.isRefreshing)
+                    .help("Refresh Quotas")
 
-                    // Import Button
                     Button(action: {
                         addAccountInitialTab = 2
                         showAddAccountSheet = true
                     }) {
                         HStack(spacing: 4) {
                             Image(systemName: "square.and.arrow.down")
-                            Text("Import...")
+                            Text("Import")
                         }
                     }
                     .buttonStyle(.bordered)
                     .help("Import account config from a friend")
 
-                    // Add Account Button
                     Button(action: {
                         addAccountInitialTab = 0
                         showAddAccountSheet = true
@@ -87,11 +60,10 @@ struct MainWindowView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.blue)
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.vertical, 12)
             .background(Color(NSColor.windowBackgroundColor))
             
             Divider()
@@ -160,9 +132,6 @@ struct MainWindowView: View {
                             }
                         }
                     }
-
-                    // Proxy & Codex Section
-                    ProxyLogsView(stats: appState.proxyStats)
                 }
                 .padding(20)
             }
@@ -175,9 +144,10 @@ struct MainWindowView: View {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(Color.green)
-                            .frame(width: 7, height: 7)
+                            .frame(width: 6, height: 6)
                         Text("Active: \(active.name)")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
                     }
                 } else {
                     Text("No active account")
@@ -197,7 +167,7 @@ struct MainWindowView: View {
             .padding(.vertical, 8)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(minWidth: 680, minHeight: 520)
+        .frame(minWidth: 580, minHeight: 380)
         .sheet(isPresented: $showAddAccountSheet) {
             AddAccountSheet(appState: appState, initialTab: addAccountInitialTab)
         }

@@ -9,60 +9,54 @@ struct AccountCardView: View {
     let onCopyShareCode: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             // Header
-            HStack(alignment: .center) {
-                // Type Icon / Avatar
-                ZStack {
-                    Circle()
-                        .fill(isActive ? Color.blue.opacity(0.2) : Color.gray.opacity(0.15))
-                        .frame(width: 42, height: 42)
+            HStack(alignment: .center, spacing: 10) {
+                // Subtle Type Icon
+                Image(systemName: account.type == .oauth ? "person.crop.circle" : "key")
+                    .font(.system(size: 20))
+                    .foregroundColor(isActive ? .blue : .secondary)
+                    .frame(width: 26, height: 26)
 
-                    Image(systemName: account.type == .oauth ? "person.crop.circle.fill" : "key.fill")
-                        .font(.system(size: 20))
-                        .foregroundColor(isActive ? .blue : .secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Text(account.name)
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold))
                             .lineLimit(1)
 
                         if isActive {
-                            HStack(spacing: 4) {
+                            HStack(spacing: 3) {
                                 Circle()
                                     .fill(Color.green)
-                                    .frame(width: 7, height: 7)
-                                Text("ACTIVE")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .frame(width: 6, height: 6)
+                                Text("Active")
+                                    .font(.system(size: 11, weight: .medium))
                                     .foregroundColor(.green)
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Color.green.opacity(0.15))
-                            .cornerRadius(6)
                         }
 
-                        Text(account.type == .oauth ? "Google OAuth" : "API Key")
-                            .font(.system(size: 10, weight: .medium))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.15))
+                        Text(account.type == .oauth ? "OAuth" : "API Key")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Color.primary.opacity(0.06))
                             .cornerRadius(4)
                     }
 
-                    if let email = account.email, !email.isEmpty {
+                    // Only show email if it is different from the account name
+                    if let email = account.email, !email.isEmpty, email != account.name {
                         Text(email)
-                            .font(.system(size: 12))
+                            .font(.system(size: 11))
                             .foregroundColor(.secondary)
+                            .lineLimit(1)
                     }
                 }
 
                 Spacer()
 
                 // Actions
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     // Export Menu
                     Menu {
                         Button(action: onExportFile) {
@@ -73,28 +67,25 @@ struct AccountCardView: View {
                         }
                     } label: {
                         Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 13))
-                            .foregroundColor(.blue)
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
                     }
                     .menuStyle(.borderlessButton)
-                    .frame(width: 24, height: 24)
+                    .frame(width: 20, height: 20)
                     .help("Export account config for friend")
 
                     if !isActive {
                         Button(action: onSwitch) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "arrow.triangle.swap")
-                                Text("Switch")
-                            }
+                            Text("Switch")
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.blue)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
 
                     Button(action: onRemove) {
                         Image(systemName: "trash")
-                            .foregroundColor(.red.opacity(0.8))
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
                     .help("Remove account")
@@ -104,31 +95,24 @@ struct AccountCardView: View {
             // Quotas
             if let quota = account.lastQuota, !quota.buckets.isEmpty {
                 Divider()
-                    .padding(.vertical, 2)
+                    .padding(.vertical, 1)
 
-                VStack(spacing: 10) {
+                VStack(spacing: 8) {
                     ForEach(quota.buckets) { bucket in
                         QuotaBucketBar(bucket: bucket)
                     }
                 }
-            } else {
-                Text("No quota information retrieved yet. Click Refresh to query Google.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .italic()
-                    .padding(.top, 4)
             }
         }
-        .padding(16)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 10)
                 .fill(Color(NSColor.controlBackgroundColor))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isActive ? Color.blue.opacity(0.6) : Color.gray.opacity(0.2), lineWidth: isActive ? 2 : 1)
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(isActive ? Color.blue.opacity(0.35) : Color.primary.opacity(0.08), lineWidth: 1)
         )
-        .shadow(color: isActive ? Color.blue.opacity(0.15) : Color.clear, radius: 8, x: 0, y: 2)
     }
 }
 
@@ -148,26 +132,27 @@ struct QuotaBucketBar: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(bucket.displayName)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(.primary)
                 Spacer()
                 Text("\(bucket.percentage)% (\(bucket.remainingAmount) / \(bucket.limit))")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(barColor)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
             }
 
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.secondary.opacity(0.15))
-                        .frame(height: 7)
+                    Capsule()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 5)
 
-                    RoundedRectangle(cornerRadius: 4)
+                    Capsule()
                         .fill(barColor)
-                        .frame(width: max(0, min(geo.size.width, geo.size.width * CGFloat(bucket.remainingFraction))), height: 7)
-                        .animation(.easeInOut(duration: 0.3), value: bucket.remainingFraction)
+                        .frame(width: max(0, min(geo.size.width, geo.size.width * CGFloat(bucket.remainingFraction))), height: 5)
+                        .animation(.easeInOut(duration: 0.2), value: bucket.remainingFraction)
                 }
             }
-            .frame(height: 7)
+            .frame(height: 5)
         }
     }
 }

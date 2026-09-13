@@ -9,12 +9,8 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 12) {
             // Header
             HStack {
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .foregroundColor(.blue)
-                    Text("Gemini Swap")
-                        .font(.system(size: 13, weight: .bold))
-                }
+                Text("Gemini Swap")
+                    .font(.system(size: 13, weight: .semibold))
 
                 Spacer()
 
@@ -35,13 +31,13 @@ struct MenuBarView: View {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(Color.green)
-                            .frame(width: 8, height: 8)
+                            .frame(width: 7, height: 7)
                         Text(active.name)
                             .font(.system(size: 13, weight: .semibold))
                             .lineLimit(1)
                     }
 
-                    if let email = active.email, !email.isEmpty {
+                    if let email = active.email, !email.isEmpty, email != active.name {
                         Text(email)
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)

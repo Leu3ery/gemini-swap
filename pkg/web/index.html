@@ -104,10 +104,8 @@
   <div class="container">
     <header>
       <div class="brand">
-        <svg viewBox="0 0 24 24"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/></svg>
         <div>
           <h1>Gemini Swap</h1>
-          <p style="font-size: 13px; color: var(--text-dim);">Multi-Account Manager & Quota Monitor</p>
         </div>
       </div>
       <div class="actions">
@@ -179,6 +177,8 @@
           }).join('') + '</div>';
         }
 
+        const emailLine = (acc.email && acc.email !== acc.name) ? `<div class="acc-email">${acc.email}</div>` : '';
+
         return `
           <div class="account-card ${isActive ? 'active' : ''}">
             <div class="card-top">
@@ -188,7 +188,7 @@
                   ${isActive ? '<span class="badge badge-active">Active</span>' : ''}
                   <span class="badge badge-type">${typeBadge}</span>
                 </h3>
-                <div class="acc-email">${acc.email || acc.id}</div>
+                ${emailLine}
               </div>
               <div>
                 ${!isActive ? `<button onclick="switchAccount('${acc.id}')">Switch</button>` : ''}
