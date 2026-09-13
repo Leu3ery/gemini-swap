@@ -92,7 +92,7 @@ class AppState: ObservableObject {
         // Update local state
         activeAccountID = id
         
-        // Run CLI switch command to update all stores and ~/.gemini/
+        // Run CLI switch command to update all stores, Antigravity, and ~/.gemini/
         runCLICommand(["switch", id])
 
         // Save local accounts.json
@@ -108,6 +108,8 @@ class AppState: ObservableObject {
             let data = try JSONEncoder().encode(store)
             try data.write(to: accountsFileURL, options: .atomic)
             syncToGeminiCLI(account: target)
+            syncToAntigravity(account: target)
+            showToast("Switched to \(target.name) (Antigravity & CLI synced)")
         } catch {
             print("Error writing accounts file: \(error)")
         }
@@ -265,6 +267,46 @@ class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    private func syncToAntigravity(account: Account) {
+        guard account.type == .oauth, let oauth = account.oauth else { return }
+
+        let geminiDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini")
+        try? FileManager.default.createDirectory(at: geminiDir, withIntermediateDirectories: true)
+
+        let expiryDate: Date
+        if let exp = oauth.expiryDate, exp > 0 {
+            expiryDate = Date(timeIntervalSince1970: Double(exp) / 1000.0)
+        } else {
+            expiryDate = Date().addingTimeInterval(3600)
+        }
+        let expiryStr = ISO8601DateFormatter().string(from: expiryDate)
+
+        let standaloneDict: [String: Any] = [
+            "token": [
+                "access_token": oauth.accessToken,
+                "token_type": oauth.tokenType ?? "Bearer",
+                "refresh_token": oauth.refreshToken ?? "",
+                "expiry": expiryStr
+            ],
+            "auth_method": "consumer"
+        ]
+
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: standaloneDict, options: []) else { return }
+
+        // 1. Write ~/.gemini/jetski-standalone-oauth-token
+        let tokenURL = geminiDir.appendingPathComponent("jetski-standalone-oauth-token")
+        try? jsonData.write(to: tokenURL)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tokenURL.path)
+
+        // 2. Update macOS Keychain
+        let b64 = jsonData.base64EncodedString()
+        let keychainVal = "go-keyring-base64:" + b64
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["add-generic-password", "-U", "-s", "gemini", "-a", "antigravity", "-w", keychainVal]
+        try? process.run()
     }
 
     @discardableResult

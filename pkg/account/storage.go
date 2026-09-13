@@ -145,6 +145,12 @@ func (s *Storage) SetActiveAccount(idOrEmail string) (*Account, error) {
 		fmt.Fprintf(os.Stderr, "Warning: failed to sync with ~/.gemini: %v\n", err)
 	}
 
+	// Synchronize to Antigravity
+	if err := SyncToAntigravity(target); err != nil {
+		// Non-fatal warning
+		fmt.Fprintf(os.Stderr, "Warning: failed to sync with Antigravity: %v\n", err)
+	}
+
 	return target, nil
 }
 

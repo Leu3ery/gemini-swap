@@ -52,10 +52,25 @@ func getClientSecret() string {
 	return decodeMask(m, 0x42)
 }
 
+func getAntigravityClientID() string {
+	m := []byte{115, 114, 117, 115, 114, 114, 116, 114, 116, 114, 119, 123, 115, 111, 54, 47, 42, 49, 49, 43, 44, 112, 42, 112, 115, 46, 33, 48, 39, 112, 113, 119, 52, 54, 45, 46, 45, 40, 42, 118, 37, 118, 114, 113, 39, 50, 108, 35, 50, 50, 49, 108, 37, 45, 45, 37, 46, 39, 55, 49, 39, 48, 33, 45, 44, 54, 39, 44, 54, 108, 33, 45, 47}
+	return decodeMask(m, 0x42)
+}
+
+func getAntigravityClientSecret() string {
+	m := []byte{5, 13, 1, 17, 18, 26, 111, 9, 119, 122, 4, 21, 16, 118, 122, 116, 14, 38, 14, 8, 115, 47, 14, 0, 122, 49, 26, 1, 118, 56, 116, 51, 6, 3, 36}
+	return decodeMask(m, 0x42)
+}
+
 var Scopes = []string{
+	"openid",
+	"email",
+	"profile",
 	"https://www.googleapis.com/auth/cloud-platform",
 	"https://www.googleapis.com/auth/userinfo.email",
 	"https://www.googleapis.com/auth/userinfo.profile",
+	"https://www.googleapis.com/auth/cclog",
+	"https://www.googleapis.com/auth/experimentsandconfigs",
 }
 
 type UserInfo struct {
@@ -289,38 +304,55 @@ func RefreshToken(oauth *account.OAuthData) error {
 		return errors.New("no refresh token available")
 	}
 
-	values := url.Values{
-		"client_id":     {getClientID()},
-		"client_secret": {getClientSecret()},
-		"refresh_token": {oauth.RefreshToken},
-		"grant_type":    {"refresh_token"},
+	clientPairs := []struct {
+		clientID     string
+		clientSecret string
+	}{
+		{getClientID(), getClientSecret()},
+		{getAntigravityClientID(), getAntigravityClientSecret()},
 	}
 
-	resp, err := http.PostForm(TokenEndpoint, values)
-	if err != nil {
-		return fmt.Errorf("failed to refresh token: %w", err)
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for _, pair := range clientPairs {
+		values := url.Values{
+			"client_id":     {pair.clientID},
+			"client_secret": {pair.clientSecret},
+			"refresh_token": {oauth.RefreshToken},
+			"grant_type":    {"refresh_token"},
+		}
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("refresh token request returned %d: %s", resp.StatusCode, string(body))
+		resp, err := http.PostForm(TokenEndpoint, values)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to refresh token: %w", err)
+			continue
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("refresh token request returned %d: %s", resp.StatusCode, string(body))
+			continue
+		}
+
+		var tokenResp TokenResponse
+		if err := json.Unmarshal(body, &tokenResp); err != nil {
+			lastErr = fmt.Errorf("failed to decode refreshed token: %w", err)
+			continue
+		}
+
+		oauth.AccessToken = tokenResp.AccessToken
+		if tokenResp.RefreshToken != "" {
+			oauth.RefreshToken = tokenResp.RefreshToken
+		}
+		if tokenResp.ExpiresIn > 0 {
+			oauth.ExpiryDate = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).UnixMilli()
+		}
+
+		return nil
 	}
 
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return fmt.Errorf("failed to decode refreshed token: %w", err)
-	}
-
-	oauth.AccessToken = tokenResp.AccessToken
-	if tokenResp.RefreshToken != "" {
-		oauth.RefreshToken = tokenResp.RefreshToken
-	}
-	if tokenResp.ExpiresIn > 0 {
-		oauth.ExpiryDate = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).UnixMilli()
-	}
-
-	return nil
+	return lastErr
 }
 
 func FetchUserInfo(accessToken string) (*UserInfo, error) {

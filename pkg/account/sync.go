@@ -1,10 +1,20 @@
 package account
 
 import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,6 +30,18 @@ type GeminiOAuthCreds struct {
 type GeminiGoogleAccounts struct {
 	Active string   `json:"active"`
 	Old    []string `json:"old"`
+}
+
+type AntigravityOAuthToken struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Expiry       string `json:"expiry,omitempty"`
+}
+
+type AntigravityStandaloneToken struct {
+	Token      AntigravityOAuthToken `json:"token"`
+	AuthMethod string                `json:"auth_method"`
 }
 
 func getGeminiDir() (string, error) {
@@ -105,6 +127,178 @@ func SyncToGeminiCLI(acc *Account) error {
 			envContent = fmt.Sprintf("export GOOGLE_GENAI_USE_GCA=true\nexport GOOGLE_CLOUD_ACCESS_TOKEN=\"%s\"\n", acc.OAuth.AccessToken)
 		}
 		_ = os.WriteFile(envPath, []byte(envContent), 0600)
+	}
+
+	return nil
+}
+
+// SyncToAntigravity synchronizes the active account credentials with Google Antigravity IDE.
+func SyncToAntigravity(acc *Account) error {
+	if acc == nil {
+		return nil
+	}
+
+	geminiDir, err := getGeminiDir()
+	if err != nil {
+		return err
+	}
+	_ = os.MkdirAll(geminiDir, 0700)
+
+	if acc.Type == TypeOAuth && acc.OAuth != nil {
+		expiryTime := time.Now().Add(1 * time.Hour)
+		if acc.OAuth.ExpiryDate > 0 {
+			expiryTime = time.UnixMilli(acc.OAuth.ExpiryDate)
+		}
+
+		tokenType := acc.OAuth.TokenType
+		if tokenType == "" {
+			tokenType = "Bearer"
+		}
+
+		st := AntigravityStandaloneToken{
+			Token: AntigravityOAuthToken{
+				AccessToken:  acc.OAuth.AccessToken,
+				TokenType:    tokenType,
+				RefreshToken: acc.OAuth.RefreshToken,
+				Expiry:       expiryTime.Format("2006-01-02T15:04:05.999999999Z07:00"),
+			},
+			AuthMethod: "consumer",
+		}
+
+		jsonData, err := json.Marshal(st)
+		if err != nil {
+			return err
+		}
+
+		// 1. Write ~/.gemini/jetski-standalone-oauth-token
+		tokenPath := filepath.Join(geminiDir, "jetski-standalone-oauth-token")
+		if err := os.WriteFile(tokenPath, jsonData, 0600); err != nil {
+			return fmt.Errorf("failed to write jetski token: %w", err)
+		}
+
+		// 2. Update macOS Keychain if on darwin
+		if runtime.GOOS == "darwin" && os.Getenv("GEMINI_SWAP_SKIP_KEYCHAIN") != "1" {
+			keychainVal := "go-keyring-base64:" + base64.StdEncoding.EncodeToString(jsonData)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			cmd := exec.CommandContext(ctx, "/usr/bin/security", "add-generic-password", "-U", "-s", "gemini", "-a", "antigravity", "-w", keychainVal)
+			_ = cmd.Run()
+			cancel()
+		}
+
+		// 3. Restart running Antigravity server if not disabled
+		if os.Getenv("GEMINI_SWAP_NO_RESTART") != "1" {
+			go func() {
+				_ = RestartAntigravityLanguageServer()
+			}()
+		}
+	}
+
+	return nil
+}
+
+// FindAntigravityServer finds the running Antigravity language_server process, port, and CSRF token.
+func FindAntigravityServer() (port int, csrfToken string, pid string, err error) {
+	out, err := exec.Command("ps", "aux").Output()
+	if err != nil {
+		return 0, "", "", err
+	}
+
+	reCsrf := regexp.MustCompile(`--csrf_token\s+([a-fA-F0-9-]+)`)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "language_server") && strings.Contains(line, "--csrf_token") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				pid = fields[1]
+				m := reCsrf.FindStringSubmatch(line)
+				if len(m) >= 2 {
+					csrfToken = m[1]
+					break
+				}
+			}
+		}
+	}
+
+	if pid == "" || csrfToken == "" {
+		return 0, "", "", fmt.Errorf("antigravity language_server not running")
+	}
+
+	client := &http.Client{
+		Timeout: 1500 * time.Millisecond,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+
+	testPort := func(p int) bool {
+		url := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/GetAuthStatus", p)
+		req, rErr := http.NewRequest("POST", url, bytes.NewReader([]byte("{}")))
+		if rErr != nil {
+			return false
+		}
+		req.Header.Set("x-codeium-csrf-token", csrfToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, dErr := client.Do(req)
+		if dErr == nil {
+			resp.Body.Close()
+			return resp.StatusCode == http.StatusOK
+		}
+		return false
+	}
+
+	if testPort(61955) {
+		return 61955, csrfToken, pid, nil
+	}
+
+	lsofOut, lErr := exec.Command("lsof", "-nP", "-p", pid).Output()
+	if lErr == nil {
+		rePort := regexp.MustCompile(`:(\d+)\s+\(LISTEN\)`)
+		for _, match := range rePort.FindAllStringSubmatch(string(lsofOut), -1) {
+			if len(match) >= 2 {
+				p, _ := strconv.Atoi(match[1])
+				if p > 0 && testPort(p) {
+					return p, csrfToken, pid, nil
+				}
+			}
+		}
+	}
+
+	return 0, "", pid, fmt.Errorf("could not connect to antigravity language server")
+}
+
+// RestartAntigravityLanguageServer signals the Antigravity language_server to reload credentials.
+func RestartAntigravityLanguageServer() error {
+	port, csrf, pid, err := FindAntigravityServer()
+	if err != nil {
+		return nil
+	}
+
+	// 1. Try graceful RPC Restart
+	if port > 0 && csrf != "" {
+		client := &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+		url := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/Restart", port)
+		req, rErr := http.NewRequest("POST", url, bytes.NewReader([]byte("{}")))
+		if rErr == nil {
+			req.Header.Set("x-codeium-csrf-token", csrf)
+			req.Header.Set("Content-Type", "application/json")
+			resp, dErr := client.Do(req)
+			if dErr == nil {
+				resp.Body.Close()
+			}
+		}
+	}
+
+	// 2. Wait up to 1.5s to see if process exited
+	time.Sleep(500 * time.Millisecond)
+	if pid != "" {
+		chk := exec.Command("kill", "-0", pid)
+		if chk.Run() == nil {
+			_ = exec.Command("kill", "-TERM", pid).Run()
+		}
 	}
 
 	return nil

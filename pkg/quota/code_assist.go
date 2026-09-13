@@ -7,10 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
-	"regexp"
-	"strconv"
-	"strings"
 	"time"
 
 	"gemini-swap/pkg/account"
@@ -43,81 +39,8 @@ type AntigravityUserStatusResponse struct {
 	} `json:"userTier"`
 }
 
-func findAntigravityServer() (int, string, error) {
-	out, err := exec.Command("ps", "aux").Output()
-	if err != nil {
-		return 0, "", err
-	}
-
-	var pid string
-	var csrfToken string
-
-	reCsrf := regexp.MustCompile(`--csrf_token\s+([a-fA-F0-9-]+)`)
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "language_server") && strings.Contains(line, "--csrf_token") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				pid = fields[1]
-				m := reCsrf.FindStringSubmatch(line)
-				if len(m) >= 2 {
-					csrfToken = m[1]
-					break
-				}
-			}
-		}
-	}
-
-	if pid == "" || csrfToken == "" {
-		return 0, "", fmt.Errorf("antigravity language_server not running")
-	}
-
-	// Try default/common port 61955 first
-	client := &http.Client{
-		Timeout: 1500 * time.Millisecond,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	testPort := func(p int) bool {
-		url := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/GetAuthStatus", p)
-		req, rErr := http.NewRequest("POST", url, bytes.NewReader([]byte("{}")))
-		if rErr != nil {
-			return false
-		}
-		req.Header.Set("x-codeium-csrf-token", csrfToken)
-		req.Header.Set("Content-Type", "application/json")
-		resp, dErr := client.Do(req)
-		if dErr == nil {
-			resp.Body.Close()
-			return resp.StatusCode == http.StatusOK
-		}
-		return false
-	}
-
-	if testPort(61955) {
-		return 61955, csrfToken, nil
-	}
-
-	// If not 61955, check open listening ports for this PID
-	lsofOut, lErr := exec.Command("lsof", "-nP", "-p", pid).Output()
-	if lErr == nil {
-		rePort := regexp.MustCompile(`:(\d+)\s+\(LISTEN\)`)
-		for _, match := range rePort.FindAllStringSubmatch(string(lsofOut), -1) {
-			if len(match) >= 2 {
-				p, _ := strconv.Atoi(match[1])
-				if p > 0 && testPort(p) {
-					return p, csrfToken, nil
-				}
-			}
-		}
-	}
-
-	return 0, "", fmt.Errorf("could not connect to antigravity language server")
-}
-
 func fetchAntigravityQuota() (*account.QuotaInfo, error) {
-	port, csrf, err := findAntigravityServer()
+	port, csrf, _, err := account.FindAntigravityServer()
 	if err != nil {
 		return nil, err
 	}

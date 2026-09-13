@@ -191,6 +191,9 @@ func handleSwitch(storage *account.Storage, args []string) {
 
 	fmt.Printf("✓ Active account switched to: %s (%s)\n", acc.Name, acc.Email)
 	fmt.Println("  Synchronized ~/.gemini/oauth_creds.json and ~/.gemini/google_accounts.json")
+	if acc.Type == account.TypeOAuth {
+		fmt.Println("  Synchronized Google Antigravity session & credentials")
+	}
 }
 
 func handleCurrent(storage *account.Storage, args []string) {
