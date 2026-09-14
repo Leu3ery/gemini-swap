@@ -32,8 +32,8 @@
 ### macOS (Native Swift App & CLI)
 
 1. Go to the [Releases](https://github.com/Leu3ery/gemini-swap/releases) page.
-2. Download **`GeminiSwap-macOS.zip`**.
-3. Unzip and move `GeminiSwap.app` to your `/Applications` folder.
+2. Download **`GeminiSwap-macOS.dmg`** and drag `GeminiSwap.app` into `Applications`. The ZIP is provided as an alternative.
+3. On first launch, macOS will warn that the developer cannot be verified because this free build is not notarized. After attempting to open it, go to **System Settings → Privacy & Security**, scroll to Security, click **Open Anyway**, then confirm **Open**. This is required only once.
 4. *(Optional CLI)*: Download `gemini-swap-darwin-arm64.tar.gz`, extract and place `gemini-swap` into `/usr/local/bin`.
 
 ### Linux (VPS / Headless Server)

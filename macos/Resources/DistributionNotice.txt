@@ -1,0 +1,4 @@
+Gemini Swap for macOS
+
+This resource is included in the application bundle so its ad-hoc code
+signature remains structurally valid after the app is archived and extracted.
