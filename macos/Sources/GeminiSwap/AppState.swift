@@ -15,10 +15,12 @@ class AppState: ObservableObject {
     @Published var switchingAccountID: String? = nil
     @Published var switchingStatusText: String? = nil
     @Published var switchStartedAt: Date? = nil
+    @Published var quotaClock: Date = Date()
 
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
     private var statsTimer: Timer?
+    private var quotaClockTimer: Timer?
 
     static let shared = AppState()
 
@@ -51,11 +53,13 @@ class AppState: ObservableObject {
         loadData()
         startWatchingFiles()
         startStatsTimer()
+        startQuotaClock()
     }
 
     deinit {
         stopWatchingFiles()
         statsTimer?.invalidate()
+        quotaClockTimer?.invalidate()
     }
 
     func loadData() {
@@ -408,6 +412,12 @@ class AppState: ObservableObject {
     private func startStatsTimer() {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
             self?.readStatsFile()
+        }
+    }
+
+    private func startQuotaClock() {
+        quotaClockTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            self?.quotaClock = Date()
         }
     }
 }

@@ -57,8 +57,26 @@ struct QuotaBucket: Codable, Identifiable {
         case resetTime = "reset_time"
     }
 
+    func resetDate() -> Date? {
+        guard let resetTime, !resetTime.isEmpty else { return nil }
+        return try? Date(resetTime, strategy: .iso8601)
+    }
+
+    func hasLocallyReset(at date: Date) -> Bool {
+        guard remainingFraction < 1, let resetDate = resetDate() else { return false }
+        return date >= resetDate
+    }
+
+    func effectiveRemainingFraction(at date: Date) -> Double {
+        hasLocallyReset(at: date) ? 1 : remainingFraction
+    }
+
+    func percentage(at date: Date) -> Int {
+        Int((effectiveRemainingFraction(at: date) * 100).rounded())
+    }
+
     var percentage: Int {
-        Int((remainingFraction * 100).rounded())
+        percentage(at: Date())
     }
 
     var displayName: String {

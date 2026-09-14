@@ -16,6 +16,11 @@ let package = Package(
         .executableTarget(
             name: "GeminiSwap",
             path: "Sources/GeminiSwap"
+        ),
+        .testTarget(
+            name: "GeminiSwapTests",
+            dependencies: ["GeminiSwap"],
+            path: "Tests/GeminiSwapTests"
         )
     ]
 )

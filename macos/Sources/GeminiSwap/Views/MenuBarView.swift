@@ -48,14 +48,16 @@ struct MenuBarView: View {
                     if let quota = active.lastQuota, !quota.allBuckets.isEmpty {
                         VStack(spacing: 6) {
                             ForEach(quota.allBuckets.prefix(4)) { bucket in
+                                let percentage = bucket.percentage(at: appState.quotaClock)
+                                let effectiveFraction = bucket.effectiveRemainingFraction(at: appState.quotaClock)
                                 HStack {
                                     Text(bucket.displayName)
                                         .font(.system(size: 11))
                                         .lineLimit(1)
                                     Spacer()
-                                    Text("\(bucket.percentage)%")
+                                    Text("\(percentage)%")
                                         .font(.system(size: 11, weight: .bold))
-                                        .foregroundColor(bucket.percentage < 30 ? .red : (bucket.percentage < 60 ? .orange : .green))
+                                        .foregroundColor(percentage < 30 ? .red : (percentage < 60 ? .orange : .green))
                                 }
 
                                 GeometryReader { geo in
@@ -64,8 +66,8 @@ struct MenuBarView: View {
                                             .fill(Color.secondary.opacity(0.2))
                                             .frame(height: 5)
                                         RoundedRectangle(cornerRadius: 3)
-                                            .fill(bucket.percentage < 30 ? Color.red : (bucket.percentage < 60 ? Color.orange : Color.green))
-                                            .frame(width: max(0, min(geo.size.width, geo.size.width * CGFloat(bucket.remainingFraction))), height: 5)
+                                            .fill(percentage < 30 ? Color.red : (percentage < 60 ? Color.orange : Color.green))
+                                            .frame(width: max(0, min(geo.size.width, geo.size.width * CGFloat(effectiveFraction))), height: 5)
                                     }
                                 }
                                 .frame(height: 5)
@@ -115,7 +117,7 @@ struct MenuBarView: View {
                                     Spacer()
 
                                     if let quota = acc.lastQuota?.allBuckets.first {
-                                        Text("\(quota.percentage)%")
+                                        Text("\(quota.percentage(at: appState.quotaClock))%")
                                             .font(.system(size: 10, weight: .medium))
                                             .foregroundColor(.secondary)
                                     }

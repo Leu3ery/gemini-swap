@@ -116,6 +116,7 @@ struct MainWindowView: View {
                                 AccountCardView(
                                     account: acc,
                                     isActive: acc.id == appState.activeAccountID,
+                                    quotaNow: appState.quotaClock,
                                     switchingText: appState.switchingAccountID == acc.id ? appState.switchingStatusText : nil,
                                     switchStartedAt: appState.switchingAccountID == acc.id ? appState.switchStartedAt : nil,
                                     switchingDisabled: appState.isSwitchingAccount,

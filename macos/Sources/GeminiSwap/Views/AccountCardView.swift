@@ -3,6 +3,7 @@ import SwiftUI
 struct AccountCardView: View {
     let account: Account
     let isActive: Bool
+    let quotaNow: Date
     let switchingText: String?
     let switchStartedAt: Date?
     let switchingDisabled: Bool
@@ -120,7 +121,7 @@ struct AccountCardView: View {
 
                     VStack(spacing: 12) {
                         ForEach(groups) { group in
-                            AntigravityQuotaGroupCard(group: group)
+                            AntigravityQuotaGroupCard(group: group, now: quotaNow)
                         }
                     }
                 } else if let buckets = quota.buckets, !buckets.isEmpty {
@@ -129,7 +130,7 @@ struct AccountCardView: View {
 
                     VStack(spacing: 8) {
                         ForEach(buckets) { bucket in
-                            QuotaBucketBar(bucket: bucket)
+                            QuotaBucketBar(bucket: bucket, now: quotaNow)
                         }
                     }
                 }
@@ -179,6 +180,7 @@ struct CircularProgressRing: View {
 
 struct AntigravityQuotaGroupCard: View {
     let group: QuotaGroup
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -199,6 +201,9 @@ struct AntigravityQuotaGroupCard: View {
             // Group Container
             VStack(spacing: 0) {
                 ForEach(Array(group.buckets.enumerated()), id: \.element.id) { index, bucket in
+                    let effectiveFraction = bucket.effectiveRemainingFraction(at: now)
+                    let percentage = bucket.percentage(at: now)
+                    let locallyReset = bucket.hasLocallyReset(at: now)
                     if index > 0 {
                         Divider()
                             .padding(.vertical, 4)
@@ -211,7 +216,13 @@ struct AntigravityQuotaGroupCard: View {
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundColor(.primary)
 
-                            if let desc = bucket.description, !desc.isEmpty {
+                            if locallyReset {
+                                Text("Scheduled reset reached — shown as 100% until the next live refresh.")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .lineLimit(2)
+                            } else if let desc = bucket.description, !desc.isEmpty {
                                 Text(desc)
                                     .font(.system(size: 10))
                                     .foregroundColor(.secondary)
@@ -223,11 +234,11 @@ struct AntigravityQuotaGroupCard: View {
                         Spacer(minLength: 8)
 
                         HStack(spacing: 6) {
-                            Text("\(bucket.percentage)%")
+                            Text("\(percentage)%")
                                 .font(.system(size: 11.5, weight: .bold, design: .rounded))
                                 .foregroundColor(.primary)
 
-                            CircularProgressRing(fraction: bucket.remainingFraction)
+                            CircularProgressRing(fraction: effectiveFraction)
                         }
                     }
                     .padding(.vertical, 3)
@@ -249,11 +260,12 @@ struct AntigravityQuotaGroupCard: View {
 
 struct QuotaBucketBar: View {
     let bucket: QuotaBucket
+    let now: Date
 
     var barColor: Color {
-        if bucket.percentage < 25 {
+        if bucket.percentage(at: now) < 25 {
             return .red
-        } else if bucket.percentage < 60 {
+        } else if bucket.percentage(at: now) < 60 {
             return .orange
         }
         return .green
@@ -266,12 +278,12 @@ struct QuotaBucketBar: View {
                     .font(.system(size: 11, weight: .regular))
                     .foregroundColor(.primary)
                 Spacer()
-                if let rem = bucket.remainingAmount, let lim = bucket.limit, lim > 0 {
-                    Text("\(bucket.percentage)% (\(rem) / \(lim))")
+                if !bucket.hasLocallyReset(at: now), let rem = bucket.remainingAmount, let lim = bucket.limit, lim > 0 {
+                    Text("\(bucket.percentage(at: now))% (\(rem) / \(lim))")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
                 } else {
-                    Text("\(bucket.percentage)%")
+                    Text("\(bucket.percentage(at: now))%")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
@@ -285,8 +297,8 @@ struct QuotaBucketBar: View {
 
                     Capsule()
                         .fill(barColor)
-                        .frame(width: max(0, min(geo.size.width, geo.size.width * CGFloat(bucket.remainingFraction))), height: 5)
-                        .animation(.easeInOut(duration: 0.2), value: bucket.remainingFraction)
+                        .frame(width: max(0, min(geo.size.width, geo.size.width * CGFloat(bucket.effectiveRemainingFraction(at: now)))), height: 5)
+                        .animation(.easeInOut(duration: 0.2), value: bucket.effectiveRemainingFraction(at: now))
                 }
             }
             .frame(height: 5)
